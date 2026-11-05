@@ -1,0 +1,120 @@
+---
+title: "Module 1 · Pollora's mental model"
+description: Follow a request end to end, from Laravel to WordPress to the Blade template, and know which route answers.
+sidebar:
+  label: 1 · The mental model
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. Facts come from the [official documentation](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/): when in doubt, it is the source of truth.
+</Aside>
+
+**Duration: 45 min · Prerequisites: Laravel and WordPress, at the level of a shipped project.**
+
+By the end of this module you can explain what happens between a request arriving and the HTML going out, and predict which route or template answers a URL.
+
+## The idea in one sentence
+
+Pollora is a **Laravel application that loads WordPress during its boot**. Laravel receives the request, WordPress runs inside a service provider, then the Laravel router decides what to render, using WordPress's conditional tags (`is_single()`, `is_page()`…).
+
+The admin, the REST API and plugins keep working.
+
+## One request, step by step
+
+1. **`public/index.php`**: Laravel's front controller, with nothing WordPress-specific.
+2. **Configuration**: the constants of `wp-config.php` are defined from Laravel configuration (`config/wordpress.php`, `.env`). WordPress and Eloquent share the same database connection.
+3. **Loading WordPress**: `wp-settings.php` is loaded by a service provider. By the end, plugins, the theme's `functions.php` and the `init` and `wp_loaded` actions have run.
+4. **Parsing the URL**: `wp()` fills `$wp_query`. Conditional tags (`is_single()`…) now answer correctly. `template_redirect` fires.
+5. **Router**: the routes of `routes/web.php` are tried in order. `Route::wp()` binds a WordPress condition to a controller.
+6. **Fallback**: if no route matches, WordPress's template hierarchy picks a Blade view (`page-about.blade.php`, then `page.blade.php`, `singular.blade.php`, `index.blade.php`).
+
+```php title="routes/web.php"
+use Illuminate\Support\Facades\Route;
+
+Route::wp('single', [BlogController::class, 'show']);
+Route::wp('page', 'contact', [ContactController::class, 'show']);
+```
+
+In `Route::wp('page', 'contact', …)`, the arguments in between are passed to the condition: it is an `is_page('contact')`.
+
+<Aside type="caution" title="Trap: order matters">
+Routes are tried in declaration order. A template route (`Route::wp('template', …)`) must be declared **before** the generic `Route::wp('page')` route, or it is never reached.
+</Aside>
+
+## What does not go through the router
+
+- **wp-admin and wp-login**: run directly by PHP. `public/wp-config.php` boots Laravel by hand, then hands control back to WordPress.
+- **REST (`/wp-json/…`)**: WordPress answers during boot, before the router.
+- **`/api/…` routes**: lightweight mode, WordPress loads **without plugins** by default (`wordpress.api_plugins`). Responses drop from about 1.3 s to 100 ms.
+
+## Check what you remember
+
+<Quiz title="Who answers?">
+A `Route::get('/contact', …)` exists in `routes/web.php`, and a WordPress "Contact" page exists too. Which one answers?
+
+- [x] The Laravel route
+- [ ] The WordPress page
+  > Routes in `routes/web.php` take priority: the template hierarchy is only a fallback.
+- [ ] Both, the last one wins
+
+Laravel first, WordPress as the fallback.
+
+</Quiz>
+
+<Quiz title="What an argument means">
+What does `Route::wp('page', 'contact', [ContactController::class, 'show'])` do?
+
+- [ ] Answers the URL `/page/contact`
+- [x] Answers when `is_page('contact')` is true
+- [ ] Registers a WordPress page named "contact"
+  > A route creates no content: it reacts to what WordPress has already parsed.
+
+The arguments between the condition and the controller are passed to the conditional function.
+
+</Quiz>
+
+<Quiz title="Paths outside the router">
+Which of these paths are served **without** going through the Laravel router?
+
+- [x] `/cms/wp-login.php`
+- [x] `/wp-json/wp/v2/posts`
+- [ ] `/blog/hello-world`
+  > A content URL goes through `index.php`, so through the router (then the template hierarchy).
+- [ ] `/api/products/search`
+  > `/api/` routes are real Laravel routes, just loaded in lightweight mode.
+
+wp-login is run directly by PHP. The REST API is served by WordPress during boot.
+
+</Quiz>
+
+<Quiz title="Lightweight mode">
+Why is a `/api/products/search` route much faster than `/wp-json/…`?
+
+- [ ] It does not use Laravel
+- [x] WordPress loads without its plugins by default
+- [ ] It is cached by the browser
+  > HTTP caching has nothing to do with this gain.
+
+That is `wordpress.api_plugins`, empty by default. A handler that needs a plugin must declare it, or use Eloquent.
+
+</Quiz>
+
+<QuizResults />
+
+## Exercise
+
+<Aside type="tip" title="Available with the lab">
+Exercise 01 is done in the `lab/` folder: `composer lab:check 01`.
+</Aside>
+
+**Goal.** In the lab, the "Contact" page renders with the generic template. Make a `ContactController` answer it and add a variable to the view, without adding a `Route::get` Laravel route.
+
+The test checks that the route is a WordPress route and that the variable reaches the view.
+
+## Going further
+
+- [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/)
+- [WordPress routes](https://pollora.dev/routing/wordpress-routes/)
