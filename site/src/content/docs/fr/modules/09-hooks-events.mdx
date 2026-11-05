@@ -1,0 +1,271 @@
+---
+title: "Module 9 · Hooks et événements"
+description: Remplacer add_action() et add_filter() par des attributs PHP, injecter des services dans les hooks, et réagir aux événements WordPress avec des listeners Laravel.
+sidebar:
+  label: 9 · Hooks et événements
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Actions & Filters](https://pollora.dev/hooks/actions-filters/), [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/), [Events & Listeners](https://pollora.dev/hooks/events-listeners/) et [WordPress Events Reference](https://pollora.dev/hooks/wordpress-events-reference/).
+</Aside>
+
+**Durée : 60 min · Prérequis : le module 1, et savoir ce que sont une action et un filtre WordPress.**
+
+À la fin de ce module, vous déclarez vos hooks **sur la méthode qui les traite**, sans `add_action()` ni `add_filter()` dans `functions.php`, et vous savez quand préférer un événement Laravel à un hook.
+
+## 1. Un hook, une méthode
+
+Avec WordPress, le nom du hook, la priorité et le nombre d'arguments vivent sur une ligne de `functions.php`, et le callback ailleurs. Avec Pollora, la méthode porte sa propre déclaration :
+
+```php title="app/Cms/Hooks/Seo.php"
+<?php
+
+namespace App\Cms\Hooks;
+
+use Pollora\Attributes\Action;
+use Pollora\Attributes\Filter;
+
+class Seo
+{
+    #[Action('wp_head', priority: 1)]
+    public function metaDescription(): void
+    {
+        if (is_singular()) {
+            echo '<meta name="description" content="'.esc_attr(get_the_excerpt()).'">';
+        }
+    }
+
+    #[Filter('the_content', priority: 10)]
+    public function shine(string $content): string
+    {
+        return str_replace('ugly', 'shiny', $content);
+    }
+}
+```
+
+- `#[Action]` et `#[Filter]` prennent le nom du hook et une `priority` facultative (`10` par défaut).
+- Ils ne s'appliquent qu'à des **méthodes**, et ils sont **répétables** : une méthode peut écouter plusieurs hooks.
+- Il n'y a **pas de nombre d'arguments à déclarer** : Pollora compte les paramètres de la signature et le transmet à WordPress. Si vous n'avez besoin que du premier argument, ne déclarez que le premier.
+
+```php
+#[Action('init', priority: 10)]
+#[Action('wp_loaded', priority: 15)]
+public function setup(): void
+{
+    // S'exécute sur les deux hooks
+}
+```
+
+<Aside type="caution" title="Piège : un filtre doit retourner une valeur">
+Une action fait quelque chose ; un filtre **change une valeur et la renvoie**. Une méthode `#[Filter]` qui oublie son `return` casse ce que WordPress affiche ensuite.
+</Aside>
+
+## 2. Où mettre la classe, et comment elle est trouvée
+
+Vous n'enregistrez rien : l'auto-découverte parcourt `app/` (ainsi que les thèmes et modules actifs), repère les méthodes **publiques** qui portent `#[Action]` ou `#[Filter]` et les enregistre auprès de WordPress. Les classes abstraites sont ignorées.
+
+`app/Cms/Hooks` est la convention, et c'est là qu'écrivent les générateurs, mais toute classe sous `app/` est trouvée. Groupez par fonctionnalité (`Seo`, `Media`, `Admin`), pas par nom de hook.
+
+```bash
+php artisan pollora:make:action Seo
+php artisan pollora:make:filter ContentFilters
+```
+
+Pour qu'une classe échappe à la découverte, ajoutez `#[SkipDiscovery]` (de `Pollora\Attributes\SkipDiscovery`).
+
+<Aside type="caution" title="Piège : le cache de découverte">
+Les résultats de la découverte sont mis en cache. En développement, après avoir ajouté un attribut ou déplacé une classe : `php artisan discovery:clear`. Si un hook ne se déclenche pas :
+
+```bash
+php artisan discovery:run --discovery=hooks   # compte les hooks découverts
+```
+
+Si le compte ne bouge pas, vérifiez que la méthode est publique, que la classe n'est pas abstraite, que l'attribut est importé depuis `Pollora\Attributes`, et que le conteneur sait construire la classe : sinon ses hooks sont ignorés, sans arrêter la requête.
+</Aside>
+
+## 3. Des services dans vos hooks
+
+Les classes découvertes sont construites par le **conteneur de services Laravel** : l'injection par le constructeur marche comme dans un contrôleur. Une seule instance est créée par classe, partagée par toutes ses méthodes de hook.
+
+```php title="app/Cms/Hooks/Analytics.php"
+use Illuminate\Contracts\Config\Repository as Config;
+use Pollora\Attributes\Action;
+
+class Analytics
+{
+    public function __construct(
+        private readonly Config $config,
+    ) {}
+
+    #[Action('wp_footer')]
+    public function printSnippet(): void
+    {
+        $id = $this->config->get('services.analytics.id');
+
+        if ($id) {
+            echo view('partials.analytics', ['id' => $id])->render();
+        }
+    }
+}
+```
+
+Gardez les constructeurs légers et faites le travail WordPress dans les méthodes de hook, où l'on sait quel hook s'exécute.
+
+## 4. Les facades `Action` et `Filter`
+
+Les attributs conviennent aux hooks **toujours actifs**. Quand l'enregistrement dépend d'une condition d'exécution, utilisez les facades, par exemple dans un service provider :
+
+```php title="app/Providers/AppServiceProvider.php"
+use App\Cms\Hooks\ContentHandler;
+use Pollora\Support\Facades\Action;
+use Pollora\Support\Facades\Filter;
+
+public function boot(): void
+{
+    // Construit ContentHandler via le conteneur et appelle sa méthode theContent()
+    Filter::add('the_content', ContentHandler::class, 20);
+
+    if (config('app.debug')) {
+        Action::add('wp_footer', function (): void {
+            echo '<!-- debug -->';
+        });
+    }
+}
+```
+
+| Besoin | Facade |
+| --- | --- |
+| Enregistrer | `Action::add()`, `Filter::add()` |
+| Déclencher | `Action::do()`, `Filter::apply()` (comme `do_action()` et `apply_filters()`) |
+| Tester l'existence | `Action::exists()`, `Filter::exists()` |
+| Retirer | `Action::remove()`, `Filter::remove()` (avec la **même priorité** que l'enregistrement) |
+| Lister | `Action::callbacks()`, `Filter::callbacks()` |
+
+- Une classe passée seule (`Filter::add('the_content', ContentHandler::class)`) voit appeler la méthode nommée d'après le hook en camelCase : `theContent()`. Avec `[ContentHandler::class, 'modify']`, c'est `modify()`.
+- Comme `add_action()`, les facades acceptent un **callback pas encore défini** (une fonction d'un plugin chargé plus tard) : il est vérifié quand le hook se déclenche.
+
+## 5. Les hooks comme événements Laravel
+
+Pour les événements WordPress courants, Pollora envoie aussi des **événements Laravel typés**, traités par des listeners ordinaires, avec injection de dépendances.
+
+```php title="app/Listeners/NotifySubscribers.php"
+<?php
+
+namespace App\Listeners;
+
+use Pollora\Events\WordPress\Post\PostPublished;
+
+class NotifySubscribers
+{
+    public function handle(PostPublished $event): void
+    {
+        $post = $event->post; // WP_Post
+        // ...
+    }
+}
+```
+
+Les classes suivent un schéma de nommage : `Pollora\Events\WordPress\Post\PostCreated` et `PostPublished`, `…\User\UserLoggedIn`, `…\Media\…`, `…\Taxonomy\TermCreated`, `…\Comment\…`, `…\Menu\…`, `…\Widget\…`, `…\Option\OptionUpdated`. Chacun expose les objets WordPress concernés en propriétés typées (`$event->post`, `$event->user`, `$event->term`…). La liste complète est dans la [référence des événements](https://pollora.dev/hooks/wordpress-events-reference/) ; `php artisan event:list` montre les événements et listeners enregistrés.
+
+Les listeners sont des listeners Laravel standard : pour le travail lourd (optimisation d'images, notifications), faites-les **mettre en file** avec `ShouldQueue` afin de ne pas ralentir l'administration. Définition, découverte et mise en file des listeners sont décrites dans la [documentation Laravel](https://laravel.com/docs/events).
+
+**Hook ou listener ?**
+
+- Vous devez **changer une donnée ou une sortie** de WordPress : un hook (`#[Filter]` ; un filtre doit renvoyer une valeur).
+- Vous **réagissez à un fait accompli**, surtout si c'est lent : un listener, éventuellement en file.
+- Les événements WordPress se déclenchent souvent : n'enregistrez que les listeners dont vous avez besoin.
+- Pour exécuter **une action** après la requête, il existe aussi `#[Async]` à côté de `#[Action]` : voir le [module 5](/fr/modules/05-async-schedule-modules/).
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Le nombre d'arguments">
+Une méthode `#[Filter('body_class')]` déclare deux paramètres. Qu'a-t-on à faire pour que WordPress lui transmette les deux valeurs ?
+
+- [ ] Passer `accepted_args: 2` à l'attribut
+  > Il n'y a pas de nombre d'arguments à déclarer dans l'attribut.
+- [x] Rien : Pollora compte les paramètres de la signature
+- [ ] Appeler `Filter::add()` à la place, qui est le seul moyen de recevoir plusieurs arguments
+  > Les deux voies détectent le nombre d'arguments : la facade le fait depuis le callback quand on l'omet.
+
+Si seul le premier argument vous intéresse, ne déclarez que le premier paramètre.
+
+</Quiz>
+
+<Quiz title="Le hook ne se déclenche pas">
+Vous venez d'ajouter `#[Action('init')]` sur une méthode d'une classe sous `app/Cms/Hooks`, et rien ne se passe en développement. Que faites-vous en premier ?
+
+- [x] `php artisan discovery:clear`, puis `php artisan discovery:run --discovery=hooks` pour vérifier le compte
+- [ ] Ajouter un `add_action('init', …)` dans `functions.php`
+  > Ce serait contourner la découverte au lieu de comprendre pourquoi elle ne voit pas la méthode.
+- [ ] Enregistrer la classe dans un service provider
+  > Les classes sont trouvées par l'auto-découverte : aucun enregistrement manuel.
+
+Si le compte ne bouge toujours pas : méthode publique ? classe non abstraite ? attribut importé depuis `Pollora\Attributes` ? classe constructible par le conteneur ?
+
+</Quiz>
+
+<Quiz title="Un filtre sans return">
+Que doit faire une méthode `#[Filter('the_title')]` ?
+
+- [ ] Afficher le nouveau titre avec `echo`
+- [x] Renvoyer la valeur reçue, modifiée
+  > Un filtre change une valeur et la renvoie à son appelant.
+- [ ] Ne rien renvoyer : l'attribut s'occupe de la valeur
+  > L'attribut n'enregistre que le hook : sans `return`, WordPress reçoit `null`.
+
+Seules les actions peuvent faire quelque chose sans rien renvoyer.
+
+</Quiz>
+
+<Quiz title="Plusieurs hooks, une méthode">
+Une même méthode doit s'exécuter sur `init` (priorité 10) et sur `wp_loaded` (priorité 15). Comment ?
+
+- [ ] Impossible : un attribut par méthode
+- [x] Deux attributs `#[Action]` sur la méthode, chacun avec sa priorité
+  > Les attributs `#[Action]` et `#[Filter]` sont répétables.
+- [ ] Deux méthodes distinctes, dont l'une appelle l'autre
+  > Ce serait contourner la répétabilité des attributs, qui existe précisément pour ce cas.
+
+Avec la facade, `Action::add()` accepte en revanche un nom de hook ou un tableau de noms.
+
+</Quiz>
+
+<Quiz title="Hook ou listener ?">
+Après la publication d'un article, vous devez prévenir un service externe, ce qui prend plusieurs secondes. Quelle approche convient le mieux ?
+
+- [ ] Un `#[Filter('the_content')]` qui fait l'appel au passage
+  > Un filtre change une valeur et s'exécute dans la requête : l'appel lent la ralentirait.
+- [x] Un listener de `PostPublished` qui implémente `ShouldQueue`
+- [ ] Un listener de `PostPublished` sans file d'attente, pour que ce soit simple
+  > Il fonctionnerait, mais le travail lourd ralentit l'administration : on le met en file.
+
+Un `#[Action]` avec `#[Async]` (module 5) est l'autre voie pour sortir le travail de la requête.
+
+</Quiz>
+
+<QuizResults />
+
+## Exercices
+
+<Aside type="tip" title="Dans le lab">
+Une fois `lab/bin/lab setup` fait (voir le [module 1](/fr/modules/01-mental-model/)), travaillez dans `lab/academy-lab/`.
+</Aside>
+
+### Exercice 05 · Un préfixe sur les titres
+
+`lab/bin/lab reset 05`, puis modifiez `app/Cms/Hooks/EventTitles.php`.
+
+**Objectif.** Faire de la méthode `prefix()` un filtre sur `the_title`, de priorité 20, qui fait commencer chaque titre par `Event: `. Aucun `add_filter()` : tout passe par l'attribut.
+
+`lab/bin/lab check 05` applique le filtre `the_title` à un titre et vérifie le résultat, puis vérifie que le préfixe est ajouté après les filtres de priorité 10.
+
+## Pour aller plus loin
+
+- [Actions & Filters](https://pollora.dev/hooks/actions-filters/) : attributs, facades, injection, suppression
+- [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/) : le guide pas à pas
+- [Events & Listeners](https://pollora.dev/hooks/events-listeners/) et la [référence des événements](https://pollora.dev/hooks/wordpress-events-reference/)
+- [Actions asynchrones](https://pollora.dev/hooks/async-actions/) : `#[Async]`, le sujet du module 5
+- [Auto-découverte](https://pollora.dev/core-concepts/auto-discovery/) : exclusions et cache
