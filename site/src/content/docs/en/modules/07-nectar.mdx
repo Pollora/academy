@@ -1,0 +1,263 @@
+---
+title: "Module 7 · Nectar: give the AI the context of your project"
+description: Install Nectar, understand its guidelines, skills and MCP tools, connect the documentation MCP server, and review what an agent generates.
+sidebar:
+  label: 7 · Nectar
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. Facts come from the official documentation: [Nectar](https://pollora.dev/nectar/overview/), [Docs MCP Server](https://pollora.dev/nectar/docs-mcp-server/), [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/) and [Abilities](https://pollora.dev/advanced/abilities/). The documentation does not pin a Nectar version: use the one Composer installs.
+</Aside>
+
+**Duration: 50 min · Prerequisites: module 1 (modules 2 and 3 help: post types, attributes, blocks). This module is for developers who use Claude Code as their coding agent.**
+
+By the end of this module you can install Nectar, tell what the agent receives upfront (guidelines), on demand (skills) and live (MCP tools), connect the Pollora documentation to Claude Code, and review what it produces.
+
+## 1. Why agents get WordPress wrong
+
+An agent writes from its training and from what it can read in your project. On WordPress, both are thin:
+
+- **Global state.** Much of WordPress is global functions and variables (`$post`, `$wp_query`): what a template can rely on depends on where in the request it runs.
+- **Hooks registered at runtime.** Reading your theme does not show which filters a plugin adds, or which post types exist once every plugin has loaded.
+- **Many eras of documentation.** Classic editor, block editor, `functions.php` snippets: the agent cannot tell which one matches your project.
+
+On Pollora there is one more gap: post types, taxonomies and hooks are registered with PHP attributes. An agent that has not seen these conventions falls back on plain WordPress code (`register_post_type()` in `functions.php`), which works against the framework.
+
+## 2. Boost and Nectar
+
+[Laravel Boost](https://laravel.com/docs/boost) gives an agent three kinds of context: **guidelines** (loaded upfront), **skills** (`SKILL.md` modules loaded on demand) and an **MCP server** (tools to inspect the running application). Boost knows Laravel, not WordPress.
+
+**Nectar** (`pollora/nectar`) is a Boost extension for Pollora: it adds the WordPress and Pollora side, using the mechanism by which a third-party package ships its own guidelines and skills.
+
+### Installation
+
+```bash
+composer require pollora/nectar --dev
+php artisan boost:install
+```
+
+Select `pollora/nectar` when Boost asks about third-party packages, or add it to `boost.json` and run `boost:update`:
+
+```json title="boost.json"
+{
+    "packages": ["pollora/nectar"]
+}
+```
+
+```bash
+php artisan boost:update
+```
+
+`boost:install` writes the guidelines into the files your agents read (`CLAUDE.md`, `AGENTS.md`...). The documentation notes that Boost and Nectar also serve Cursor, Copilot and Codex; this course only covers Claude Code.
+
+### Keeping the context current
+
+After a `composer update`, run `php artisan boost:update` again to refresh guidelines and skills; `--discover` also offers those of newly installed packages. The guideline text is picked from your installed framework (12.x or 13.x).
+
+## 3. Three layers of context
+
+### Guidelines (upfront)
+
+They describe Pollora's architecture (Laravel routes first, the WordPress template hierarchy as fallback, Blade only), the registration attributes (`#[PostType]`, `#[Taxonomy]`, `#[Action]`, `#[Filter]`, `#[Schedule]`, `#[WpRestRoute]`, `#[Ajax]`, `#[Ability]`, `#[SkipDiscovery]`), `Route::wp()`, Sage Directives, theme structure and Artisan commands. A key rule: **never call WordPress registration functions directly**; use attributes and discovery.
+
+### Skills (on demand)
+
+Twelve skills, loaded when the task matches:
+
+| Skill | Activates for |
+|---|---|
+| `pollora-post-types` | Custom post types with `#[PostType]` |
+| `pollora-taxonomies` | Custom taxonomies with `#[Taxonomy]` |
+| `pollora-theming` | Themes (Blade or block), Vite, Tailwind, assets, theme.json |
+| `pollora-hooks` | Actions and filters with attributes |
+| `pollora-blocks` | Gutenberg blocks (JSX/TSX, Blade rendering, `<InnerBlocks />`) |
+| `pollora-rest-api` | `#[WpRestRoute]` endpoints, `#[Ajax]` handlers |
+| `pollora-scheduling` | Scheduled tasks with `#[Schedule]` |
+| `pollora-modules` | Laravel Modules (nwidart) with discovery |
+| `pollora-abilities` | Abilities API with `#[Ability]` and the `Ability` facade |
+| `pollora-typed-meta` | Typed meta with `#[Meta]`, `Meta::of()`, `pollora:meta:audit` |
+| `pollora-roles` | Capabilities through the Gate, roles with `#[Role]`, `#[ModifyRole]`, `#[CapabilitySet]` |
+| `pollora-block-bindings` | `#[BlockBinding]` sources, bindable Blade blocks |
+
+This is the content of modules 2 to 5 of this course, made available to the agent.
+
+### MCP tools (live)
+
+Nectar runs its own MCP server, `pollora-nectar`, next to Boost's. Its tools read the **live** environment, which static code cannot show:
+
+| Tool | Returns |
+|---|---|
+| `pollora_status` | PHP, Laravel, Pollora and WordPress versions; active theme; discovery cache; Pollora packages |
+| `wordpress_info` | Version, site URL, active/inactive plugins, active and parent theme, multisite, constants, locale, permalinks |
+| `post_types_info` | Registered post types and their configuration (`filter`, `include_builtin`) |
+| `taxonomies_info` | Registered taxonomies and their configuration |
+| `registered_hooks` | Hooks discovered from `#[Action]` and `#[Filter]` (class, method, priority) |
+| `active_theme_info` | Theme structure, providers, blocks, Blade templates, Vite and theme.json status |
+| `discovered_components` | Auto-discovered components, grouped by type |
+| `wordpress_routes` | Routes, including `Route::wp()` conditions |
+| `modules_info` | Installed Laravel Modules and their status |
+| `wp_option` | One WordPress option value by key |
+
+All of them are **read-only**: none changes the application. The Nectar overview page also documents `scheduled_events` (scheduled events and their driver), which the guide's list of ten tools does not include: the documentation is not aligned on the exact tool count.
+
+Why this beats guessing: "which post types exist?" has its answer inside WordPress once every plugin has loaded, not in your repository. The agent calls `post_types_info` instead of inventing.
+
+To declare it to Claude Code, add the server to the project's `.mcp.json`:
+
+```json title=".mcp.json"
+{
+    "mcpServers": {
+        "pollora-nectar": {
+            "command": "php",
+            "args": ["artisan", "nectar:mcp"]
+        }
+    }
+}
+```
+
+In a DDEV project, run it inside the container: `"command": "ddev", "args": ["exec", "php", "artisan", "nectar:mcp"]`.
+
+## 4. The documentation MCP server
+
+Separate from Nectar, the Pollora documentation is a remote MCP server: `https://pollora.dev/mcp`. No account, no project, usable even before you install Pollora. It exposes three read-only tools: `search_docs` (full-text search), `get_page` (a page as Markdown, by path or URL) and `list_pages` (every page with its summary).
+
+To connect it to Claude Code:
+
+```bash
+claude mcp add --transport http pollora-docs https://pollora.dev/mcp
+```
+
+Add `--scope project` to save it in the project's `.mcp.json` and share it with your team. To make sure it is used, ask: "check the Pollora docs". Without MCP, every docs page also exists as Markdown by adding `.md` to its path (for example `/routing/controllers.md`).
+
+| | Docs MCP server | Nectar |
+|---|---|---|
+| Runs | On pollora.dev | In your project (`php artisan nectar:mcp`) |
+| Knows | The documentation | Your application: routes, hooks, post types, versions |
+| Install | Add a URL | `composer require pollora/nectar --dev` |
+| Use it to | Learn an API, find the right attribute | Write code that fits your project |
+
+In a Pollora project, connect both.
+
+## 5. A good prompt versus a vague prompt
+
+With guidelines, skills and tools in place, prompts can stay short, but they should be precise about the result.
+
+> **Vague**: "Add events to the site."
+
+The agent has to guess: post type or meta? where to declare it? exposed in the REST API?
+
+> **Precise**: "Add an `event` post type with a `venue` taxonomy, both shown in the REST API. Use Pollora's attributes, then check with `post_types_info` that it is registered."
+
+The `pollora-post-types` and `pollora-taxonomies` skills steer the agent to `#[PostType('event')]` and `#[ShowInRest]` instead of `register_post_type()`, and the tool lets it **verify** its work. Other examples from the documentation: "Why doesn't my filter on `the_content` run?" (the agent compares `registered_hooks` and `wordpress_info`); "Render single events with a controller" (`wordpress_routes` shows the existing routes).
+
+## 6. Reviewing what the agent produces
+
+Nectar's tools report state, but **you review what the agent writes**. Treat its output as a draft:
+
+- run the tests;
+- run `vendor/bin/pint` for style (it fixes PHP files);
+- run `php artisan pollora:doctor`, which catches silent failures.
+
+What an agent can get wrong, honestly: follow an old tutorial rather than Pollora's conventions; assume an API exists; present an unverified answer with confidence; forget an authorization check. Ask it to cite the documentation page it follows, and to verify with a tool when possible.
+
+## 7. Limits and traps
+
+- **Pollora only.** Nectar requires `pollora/framework`. Neither tool works on a WordPress install without Pollora.
+- **Development only.** Nectar loads only when `APP_ENV` is `local` or `development`: not in production or staging. `NECTAR_ENABLED=false` turns it off locally.
+- **Read-only.** The tools report state; they change nothing.
+- **Discovery-based hooks.** `registered_hooks` lists hooks declared with Pollora attributes; an `add_action()` from a third-party plugin does not appear.
+- **No WordPress documentation search.** For WordPress core APIs, the agent relies on its training and on the code.
+- **Narrow upgrade prompts.** `upgrade-pollora-v13` (12.x to 13) and `upgrade-pollora-v13-32` (13.0 up to, but not including, 13.32); a project already on 13.34 sees neither.
+
+<Aside type="caution" title="Traps to know">
+- **Outdated skills after a framework upgrade**: run `php artisan boost:update` again.
+- **The agent calls `register_post_type()`**: remind it of the attributes; if it keeps happening, check that Nectar is installed and that `boost:update` has run.
+- **Secrets**: never paste an API key or a password into the chat. The conversation context is not a vault.
+</Aside>
+
+## 8. Your turn: try it on your project
+
+There is no lab exercise for this module. On your own Pollora project, in development:
+
+1. `composer require pollora/nectar --dev`, then `php artisan boost:install`, selecting `pollora/nectar`.
+2. Add `pollora-nectar` to `.mcp.json` (section 3) and connect the docs with `claude mcp add --transport http pollora-docs https://pollora.dev/mcp`.
+3. In Claude Code, ask: "Call `pollora_status`, then list the post types with `post_types_info`."
+4. Give it a small task with a precise prompt (section 5), then review: tests, `vendor/bin/pint`, `php artisan pollora:doctor`.
+
+Want to expose your own site to agents? [Abilities](https://pollora.dev/advanced/abilities/) declare what the site can do, with permissions and an input schema. An ability is not an MCP tool, but what one is made of; without `can()`, it refuses everything.
+
+## Check what you learned
+
+<Quiz title="Where Nectar loads">
+In which environments does Nectar load?
+
+- [x] `local` and `development`
+- [ ] Everywhere, as long as `NECTAR_ENABLED` is not `false`
+  > That variable turns it off locally; Nectar does not load elsewhere anyway.
+- [ ] Production only, to help with diagnosis
+  > Nectar is a development tool; it loads in neither production nor staging.
+
+Nectar is a development package: `composer require pollora/nectar --dev`.
+
+</Quiz>
+
+<Quiz title="Docs server or Nectar">
+You want the agent to know the post types actually registered on your site. What do you connect?
+
+- [ ] The documentation MCP server (`https://pollora.dev/mcp`)
+  > It knows the documentation, not your application.
+- [x] Nectar, with the `post_types_info` tool
+- [ ] Nothing: the agent infers it from `functions.php`
+  > Post types depend on plugins loaded at runtime, which code alone does not show.
+
+The docs server answers "how do I?", Nectar answers "what is in this project?".
+
+</Quiz>
+
+<Quiz title="After an upgrade">
+You just ran `composer update` on the framework. What do you do for the agent?
+
+- [ ] Nothing: skills update themselves
+  > Guidelines and skills are written by Boost; they do not refresh on their own.
+- [x] `php artisan boost:update`
+- [ ] `php artisan nectar:mcp`
+  > That command starts the MCP server; it refreshes nothing.
+
+`--discover` also offers the guidelines and skills of newly installed packages.
+
+</Quiz>
+
+<Quiz title="What the tools guarantee">
+Nectar's tools are read-only. What does that imply for the code the agent writes?
+
+- [ ] It is necessarily correct, since the agent could check the state
+  > The tools describe state; they do not validate code.
+- [x] It remains a draft: tests, `vendor/bin/pint` and `php artisan pollora:doctor` are still on you
+- [ ] The agent cannot write files
+
+Read-only means the tools do not modify the application, not that the agent is infallible.
+
+</Quiz>
+
+<Quiz title="An invisible plugin hook">
+`registered_hooks` does not show a filter a third-party plugin added with `add_action()`. Why?
+
+- [ ] The tool is broken
+- [x] It lists hooks discovered from Pollora's `#[Action]` and `#[Filter]` attributes
+- [ ] Third-party plugins are not loaded in development
+
+To know which plugins are active, the agent can use `wordpress_info`.
+
+</Quiz>
+
+<QuizResults />
+
+## Going further
+
+- [Nectar](https://pollora.dev/nectar/overview/): configuration (`config/nectar.php`), architecture, upgrade prompts
+- [Docs MCP Server](https://pollora.dev/nectar/docs-mcp-server/): other clients, `llms.txt`
+- [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/)
+- [Abilities](https://pollora.dev/advanced/abilities/): expose your site to agents
