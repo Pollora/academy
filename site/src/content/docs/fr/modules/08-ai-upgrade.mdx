@@ -1,0 +1,262 @@
+---
+title: "Module 8 · Mettre à jour Pollora avec l'IA"
+description: Faire migrer un projet Pollora avec un agent IA et les prompts de mise à jour de Nectar, sans perdre le contrôle de ce qu'il change.
+sidebar:
+  label: 8 · Mise à jour avec l'IA
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Nectar](https://pollora.dev/nectar/overview/), [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/), [Dashboard et statut](https://pollora.dev/advanced/dashboard/) et [Installation](https://pollora.dev/getting-started/installation/).
+</Aside>
+
+**Durée : 60 min · Prérequis : le module 7 (Nectar et les agents de code), Claude Code installé, et un projet Pollora sous Git.**
+
+À la fin de ce module, vous savez confier une montée de version à un agent en gardant le contrôle : filet de sécurité avant, relecture critique du diff, vérifications objectives après, et plan de retour arrière.
+
+<Aside type="caution" title="L'agent propose, vous décidez">
+Nectar ne fait que **guider** l'agent. Ses outils MCP sont en lecture seule et la documentation le rappelle : vous relisez ce que l'agent écrit. Une montée de version réussie se prouve par des commandes qui sortent en 0, pas par le compte rendu de l'agent.
+</Aside>
+
+## 1. Les prompts de mise à jour de Nectar
+
+Nectar expose, en plus de ses outils, des **prompts MCP** qui guident un agent pas à pas dans une montée de version. Ils s'enregistrent **automatiquement, et seulement si la version du framework installé correspond** : rien à activer.
+
+| Prompt | Disponible quand | Ce qu'il couvre |
+|---|---|---|
+| `upgrade-pollora-v13` | Pollora 12.x | La migration complète de Pollora 12 vers 13 |
+| `upgrade-pollora-v13-32` | Pollora 13.0 jusqu'à 13.32 exclu | La migration vers 13.32 : dépendances, `composer-patches` 2, commandes renommées, paquets extraits, blocs, fichiers du squelette, `theme.json` |
+
+Conséquences à connaître :
+
+- Un projet déjà en 13.34 ne voit **aucun** des deux prompts : ils existent pour 12.x vers 13 et pour 13.0–13.31 vers 13.32.
+- Nectar ne se charge que dans les environnements `local` et `development` : on ne monte pas de version avec l'agent en production.
+- Un prompt absent n'est pas une panne : c'est, le plus souvent, que la version installée n'est pas dans la plage.
+
+<Aside type="caution" title="Une incohérence de la documentation">
+La page Nectar décrit la plage de `upgrade-pollora-v13-32` comme « 13.0 à 13.4.x », la page sur les agents IA comme « 13.0 jusqu'à 13.32 exclu ». Le code de Nectar suit la seconde. Fiez-vous à la seconde et vérifiez dans Claude Code que le prompt apparaît (section 3).
+</Aside>
+
+## 2. Ce que couvrent les prompts
+
+Selon la documentation, le processus suit six étapes : **évaluer → filet de sécurité → analyser le code → appliquer → mettre à jour les dépendances → nettoyer et vérifier**. Chaque changement cassant vient avec des motifs de recherche et des exemples avant/après.
+
+**`upgrade-pollora-v13` (12.x vers 13)** :
+
+- suppression de la facade `Loop` (13.2), remplacée par les Sage Directives (`@title`, `@content`, `@excerpt`) ;
+- fin de l'enregistrement par config (`config/post-types.php`, `config/taxonomies.php`) au profit de classes `#[PostType]` et `#[Taxonomy]` (13.4) ;
+- suppression de la directive Blade `@theme`, qui entre en conflit avec l'at-rule `@theme` de Tailwind CSS v4 (13.4) ;
+- changement de namespace du modèle de route, de `Domain\Models` vers `Infrastructure\Models` (13.4) ;
+- renommage du middleware CSRF (`ValidateCsrfToken` devient `PreventRequestForgery`), avec les exclusions de routes WordPress ;
+- configuration Vite du thème (`@roots/vite-plugin` avec `wordpressThemeJson`) ;
+- passage à WordPress 7.0 ;
+- nettoyage après la montée de version : vidage des caches, reconstruction de la découverte, `wp transient delete --all`.
+
+**`upgrade-pollora-v13-32` (13.0–13.4 vers 13.32)** :
+
+- dépendances : `laravel/framework`, `johnpbloch/wordpress` `^7.1`, paquets WordPress depuis wp-packages au lieu de wpackagist ;
+- correctifs de WordPress : `cweagans/composer-patches` 2, `patches.lock.json`, le script `patches-relock`, et la vérification que le `__()` de WordPress est bien patché ;
+- commandes Artisan renommées selon la convention des deux-points (`pollora:make:theme`…), les anciens noms restant des alias ;
+- classes déplacées dans `pollora/hook`, `pollora/option` et `pollora/ajax` ;
+- suppression de `Loop` et `Query`, domaine obligatoire pour `Translater` ;
+- blocs dans `resources/views/blocks`, enregistrés sans fournisseur de services ;
+- fichiers du squelette : `routes/web.php`, la table de cache, la règle de slash final de `.htaccess` ;
+- thèmes : jetons de design dans `@theme static`, `theme.json` généré.
+
+<Aside type="note" title="Version cible">
+Le numéro de version de Pollora suit celui de la version de Laravel sur laquelle il est construit (13.36 repose sur Laravel 13.36). C'est pourquoi le prompt « vers 13.32 » saute de 13.4 à 13.32. Le squelette `pollora/pollora` et le framework portent le même numéro et sont étiquetés ensemble : **un numéro décrit une installation complète**.
+</Aside>
+
+## 3. Lancer un prompt MCP depuis Claude Code
+
+Prérequis (documentés) : Nectar installé avec `composer require pollora/nectar --dev`, puis `php artisan boost:install` ; le serveur `pollora-nectar` déclaré dans `.mcp.json` :
+
+```json title=".mcp.json"
+{
+    "mcpServers": {
+        "pollora-nectar": {
+            "command": "php",
+            "args": ["artisan", "nectar:mcp"]
+        }
+    }
+}
+```
+
+Avec DDEV, la commande devient `ddev` et les arguments `exec php artisan nectar:mcp`.
+
+Côté Claude Code (ce point relève de Claude Code, pas de la documentation Pollora), les prompts d'un serveur MCP apparaissent comme des commandes slash de la forme `/mcp__<serveur>__<prompt>`. Tapez `/mcp__pollora-nectar__` : la liste ne doit proposer que le ou les prompts qui s'appliquent à votre version. Pour lancer la montée de version :
+
+```text
+/mcp__pollora-nectar__upgrade-pollora-v13-32
+```
+
+Contrôlez aussi la version installée : `php artisan pollora:status` l'affiche, et `php artisan pollora:status --json` donne `framework.current`, utile dans un script.
+
+<Aside type="caution" title="Si le prompt n'apparaît pas">
+Vérifiez dans cet ordre : la version (`pollora:status`) est-elle dans la plage ? `APP_ENV` vaut-il `local` ou `development` ? `NECTAR_ENABLED` n'est-il pas à `false` ? Le serveur `pollora-nectar` est-il bien déclaré et démarré ? Ne recopiez pas le texte du prompt à la main : il dépend de la version.
+</Aside>
+
+## 4. Votre rôle : avant, pendant, après
+
+### Avant : le filet de sécurité
+
+Le prompt demande lui-même de travailler sur une branche dédiée et de valider `composer.lock` et `patches.lock.json` avant la mise à jour. Faites en plus :
+
+1. **Une branche** dédiée, et un `git status` propre : sans cela, impossible de distinguer ce que l'agent a changé de votre travail en cours.
+2. **Une sauvegarde de la base de données.** Le code se restaure avec Git, pas les données.
+3. **La base de référence des tests** : lancez la suite avant, notez le résultat.
+
+### Pendant : relire le diff avec méfiance
+
+Lisez le diff comme une revue de code d'un inconnu. Une liste courte :
+
+- Le diff ne touche-t-il que des fichiers attendus (`composer.json`, `composer.lock`, `patches.lock.json`, config, thème, squelette) ?
+- Une dépendance a-t-elle été ajoutée, retirée ou remplacée sans que le prompt le demande ?
+- Un test a-t-il été supprimé, désactivé ou assoupli pour passer ?
+- Vos classes personnelles ont-elles été réécrites au-delà du changement documenté ?
+- Une valeur secrète (`.env`, clé, jeton) a-t-elle été copiée dans un fichier suivi ?
+
+### Après : des vérifications objectives
+
+```bash
+php artisan discovery:clear
+php artisan pollora:doctor
+```
+
+`pollora:doctor` cherche les pannes **silencieuses**, celles où le site s'affiche et où chaque commande sort en 0 : correctif du noyau WordPress, `patches.lock.json`, fichier `.env`, cache de découverte, build du thème, plugins et modules. Il sort avec le code `1` si un contrôle trouve une erreur (les avertissements sortent en 0), et affiche sous chaque problème la commande qui le corrige. Lancez ensuite la suite de tests, ouvrez le site et `wp-admin`, et, pour une montée depuis 12.x, `wp transient delete --all` (avec DDEV : `ddev exec wp transient delete --all`).
+
+## 5. Ce qu'un agent ne peut pas savoir
+
+- **Vos plugins et votre code personnel** : l'agent lit le dépôt, pas votre intention. Demandez-lui de lister ce qu'il n'a pas pu vérifier.
+- **Les données de production** : il ne voit que l'environnement local. Une migration ou un changement de config qui passe en local peut se comporter autrement sur des données réelles.
+- **Le comportement des plugins tiers** : la documentation le rappelle pour les hooks, `registered_hooks` ne liste que les hooks déclarés avec les attributs Pollora, pas ceux qu'un plugin ajoute avec `add_action()`.
+
+Une consigne qui marche bien, à ajouter après le prompt :
+
+```text
+Avant d'appliquer quoi que ce soit, liste tes hypothèses et tout ce que tu ne peux pas vérifier
+(plugins, données de production, comportement de plugins tiers). Après chaque étape,
+dis comment tu l'as vérifiée : commande lancée et résultat.
+```
+
+### Plan de retour arrière
+
+Écrivez-le **avant** de commencer : revenir à la branche d'origine, restaurer `composer.lock` et `patches.lock.json` validés, relancer `composer install`, restaurer la sauvegarde de la base, puis `php artisan discovery:clear`. Si vous ne savez pas faire chacune de ces étapes, ne démarrez pas.
+
+## 6. Pour les mainteneurs : garder les guides à jour
+
+Après un `composer update`, relancez `php artisan boost:update` pour rafraîchir les guidelines et les skills ; `--discover` propose ceux des paquets nouvellement installés. Le texte des guidelines est choisi d'après la version majeure du framework installé (12.x ou 13.x).
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Quand le prompt apparaît-il ?">
+Votre projet est en Pollora 13.34. Quels prompts de mise à jour Nectar vous propose-t-il ?
+- [ ] `upgrade-pollora-v13-32`
+  > Il concerne les projets de 13.0 jusqu'à 13.32 exclu.
+- [ ] `upgrade-pollora-v13`
+  > Il concerne les projets en 12.x.
+- [x] Aucun des deux
+  > La documentation précise qu'un projet déjà en 13.34 ne voit aucun des deux prompts.
+
+Un prompt qui n'apparaît pas signale d'abord une version hors plage.
+
+</Quiz>
+
+<Quiz title="Le premier geste">
+Que faites-vous avant de lancer le prompt ?
+- [x] Créer une branche, avoir un `git status` propre et sauvegarder la base de données
+- [ ] Lancer le prompt sur la branche principale : Git permet de revenir en arrière
+  > Git restaure le code, pas les données de la base.
+- [ ] Laisser l'agent créer la sauvegarde pendant l'étape « appliquer »
+
+Le filet de sécurité précède toute modification.
+
+</Quiz>
+
+<Quiz title="Ce que vérifie pollora:doctor">
+Lesquelles de ces pannes `pollora:doctor` peut-il détecter ?
+- [x] Un `patches.lock.json` plus ancien que les correctifs du framework
+- [x] Une classe ajoutée depuis l'écriture du cache de découverte, donc non enregistrée
+- [ ] Une faute de logique dans votre contrôleur
+  > Le doctor cherche des pannes de configuration silencieuses, pas des erreurs métier : c'est le rôle des tests.
+- [ ] Un plugin tiers qui se comporte mal en production
+  > Il ne voit que le projet local.
+
+Il sort en 1 quand un contrôle trouve une erreur.
+
+</Quiz>
+
+<Quiz title="Vérité de la montée de version">
+Le compte rendu de l'agent affirme « mise à jour terminée, tout fonctionne ». Quelle preuve acceptez-vous ?
+- [ ] Le compte rendu lui-même, puisque l'agent a suivi le prompt
+  > Le prompt demande de ne pas annoncer un succès non vérifié ; vérifiez vous aussi.
+- [x] `pollora:doctor` sans erreur, la suite de tests verte et un diff relu
+- [ ] Le site s'affiche sur la page d'accueil
+  > Les pannes que le doctor traque sont celles où le site s'affiche quand même.
+
+Une preuve est une commande que vous avez lancée.
+
+</Quiz>
+
+<Quiz title="Ce qu'un agent ne sait pas">
+Quelles informations ne peut-il pas déduire seul du dépôt ?
+- [x] Le comportement d'un plugin tiers sur vos données de production
+- [x] Ce que votre code personnel est censé faire exactement
+- [ ] Les motifs de recherche listés par le prompt
+  > Ils sont fournis par le prompt.
+- [ ] La version du framework installée
+  > `pollora:status` et Nectar la lisent.
+
+D'où la consigne de lister les hypothèses.
+
+</Quiz>
+
+<QuizResults />
+
+## Exercice guidé
+
+Ce n'est pas un exercice du laboratoire : le laboratoire ne contient pas encore de projet ancien. Faites-le sur **une copie de votre propre projet**, ou sur un projet neuf figé sur une version antérieure à 13.32 grâce à l'option documentée `--ver` du CLI :
+
+```bash
+pollora new upgrade-practice --ver=13.4.0 --git
+```
+
+`13.4.0` n'est qu'un exemple de version antérieure à 13.32 : l'option accepte une version ou une contrainte précise. Si cette version ne s'installe pas dans votre environnement (PHP, Composer), c'est une information à noter, pas un obstacle : prenez une copie de projet réel.
+
+**Point de contrôle 1 : filet de sécurité.**
+- `git switch -c chore/upgrade-pollora` réussit.
+- `git status --porcelain` n'affiche rien.
+- Vous avez une sauvegarde de la base, et un fichier de notes avec votre plan de retour arrière.
+- La suite de tests tourne et vous avez noté son résultat de départ.
+
+**Point de contrôle 2 : le prompt est disponible.**
+- `composer require pollora/nectar --dev`, puis `php artisan boost:install`, et `.mcp.json` déclare `pollora-nectar`.
+- `php artisan pollora:status --json` donne un `framework.current` inférieur à 13.32.
+- Dans Claude Code, la liste de `/mcp__pollora-nectar__` contient `upgrade-pollora-v13-32`. Si Composer refuse d'installer Nectar sur cette version, notez le message : c'est un résultat de l'exercice.
+
+**Point de contrôle 3 : lancer la montée de version et relire le diff.**
+- Lancez `/mcp__pollora-nectar__upgrade-pollora-v13-32`, puis ajoutez la consigne de la section 5 (hypothèses et vérifications).
+- Relisez `git diff` avec la liste de la section 4. Écrivez les trois changements qui vous ont le plus surpris, et ce que vous avez refusé ou corrigé.
+
+**Point de contrôle 4 : vérifications objectives.** Chacune doit réussir :
+
+```bash
+php artisan discovery:clear
+php artisan pollora:doctor     # code de sortie 0
+php artisan pollora:status --json   # framework.current >= 13.32
+```
+
+et la suite de tests de votre projet passe, avec au moins autant de tests qu'au départ.
+
+**Point de contrôle 5 : un paragraphe.** Rédigez, en un paragraphe, ce que l'agent a modifié, ce que vous avez modifié à la main, ce que vous n'avez pas pu vérifier, et si vous reviendriez en arrière (et comment).
+
+Critères de réussite : points 1 à 4 verts, `pollora:doctor` sans erreur, tests verts, et un paragraphe qui distingue clairement le travail de l'agent du vôtre.
+
+## Pour aller plus loin
+
+- [Nectar](https://pollora.dev/nectar/overview/) : outils MCP, skills, assistance à la mise à jour, configuration
+- [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/) : limites et exemples de prompts
+- [Dashboard et statut](https://pollora.dev/advanced/dashboard/) : `pollora:status`, `pollora:doctor` et Site Health
+- [Installation](https://pollora.dev/getting-started/installation/) : options du CLI, dont `--ver` et `--stable`
