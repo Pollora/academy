@@ -1,0 +1,291 @@
+---
+title: "Module 4 · Themes"
+description: Understand how a Pollora theme is built, from pollora:make:theme to the generated theme.json, Blade templates, Vite and the block theme.
+sidebar:
+  label: 4 · Themes
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. The facts come from the official documentation, mainly [Theme Structure](https://pollora.dev/theming/theme-structure/), [Assets & Vite](https://pollora.dev/theming/assets-vite/) and [Blade templates in WordPress](https://pollora.dev/guides/blade-templates-wordpress/): when in doubt, the documentation is authoritative.
+</Aside>
+
+**Duration: 55 min · Prerequisites: module 1 (the mental model), and a little CSS.**
+
+By the end of this module you will be able to generate a theme, say where its design lives, tell which file WordPress reads and which one is Blade, load an asset compiled by Vite, and recognise which of the two kinds of theme you are looking at.
+
+## Generating a theme
+
+```bash
+php artisan pollora:make:theme
+```
+
+The command asks a few questions, starting with the template to start from:
+
+| Template | Repository | What it is |
+|---|---|---|
+| Default | `pollora/theme-default` | A Blade starter: Vite, Tailwind CSS |
+| E-commerce | `pollora/theme-apiary` | A WooCommerce storefront, Blade and Alpine.js |
+| Magazine | `pollora/theme-buzz` | A block theme (Full Site Editing) |
+| Custom | any `owner/repo` | Your own template, from GitHub |
+
+`--repository=pollora/theme-buzz` skips the prompt. The command downloads the template's latest tag and fills in its placeholders (name, namespace, pattern slugs, `style.css` header). The options `--theme-author`, `--theme-description`, `--theme-version`, `--force`, `--activate` and `--no-activate` let you answer without interaction.
+
+It activates the theme only where the site needs one: a site with no usable theme (a first install) gets it without a question. A site that already has one is asked, **No** by default, so `--no-interaction` never replaces a working theme.
+
+## The Blade theme: structure
+
+The useful part of a theme's `functions.php` is three lines:
+
+```php title="functions.php"
+<?php
+
+declare(strict_types=1);
+
+use Pollora\Modules\Domain\Enums\ModuleType;
+
+pollora_register(ModuleType::Theme);
+```
+
+`pollora_register()` detects the active theme's name and path by itself, then triggers the automatic discovery of attributes, service providers, hooks and so on.
+
+A generated theme contains, among others:
+
+```plaintext
+themes/my-theme/
+├── app/Providers/        # auto-discovered service providers
+├── config/               # menus.php, supports.php, gutenberg.php, login.php…
+├── resources/
+│   ├── assets/           # JS, CSS, fonts, images
+│   └── views/            # Blade templates
+│       └── blocks/       # Gutenberg blocks
+├── functions.php
+├── style.css             # theme metadata for WordPress
+├── theme.json            # base editor settings
+└── vite.config.js
+```
+
+<Aside type="note" title="Two layouts in the docs">
+The detailed example on the "Theme Structure" page puts `assets/` and `views/` at the theme root, while the rest of the documentation (Blade templates, block theme, blocks) speaks of `resources/assets/` and `resources/views/`. This module uses `resources/`, the form used everywhere else.
+</Aside>
+
+## The design lives in `@theme`
+
+This is the most important point of the module. Colours, font sizes, fonts and radii are declared **once**, in the `@theme` block of `resources/assets/css/app.css`. At build time those values are written into the `theme.json` the editor reads: change a value, run the build, and the front end and the editor change together.
+
+```css title="resources/assets/css/app.css"
+@import "tailwindcss";
+
+@theme static {
+    --color-primary: #1f2937;
+    --color-surface: #f9fafb;
+
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+
+    --radius-md: 0.375rem;
+}
+```
+
+The `wordpressThemeJson` Vite plugin (from `@roots/vite-plugin`) reads four families of variables:
+
+| Variable | Written to |
+|---|---|
+| `--color-*` | `settings.color.palette` |
+| `--text-*` | `settings.typography.fontSizes` |
+| `--font-*` | `settings.typography.fontFamilies` |
+| `--radius-*` | `settings.border.radiusSizes` |
+
+The merged result is written to `public/build/theme/{slug}/assets/theme.json`, and Pollora hands it to WordPress at runtime through the `wp_theme_json_data_theme` filter.
+
+Three rules make this work:
+
+- **`@theme static`, and a plain `@import "tailwindcss"`.** Tailwind only emits the variables your templates use, and the plugin only sees what Tailwind emits. `static` on your own block emits everything you declare. Do not write `@import "tailwindcss" theme(static)`: it emits Tailwind's whole default theme, and the editor would then offer some 290 colours nobody chose.
+- **Concrete values in `@theme`.** The plugin copies each value as it is. A token written `var(--wp--preset--color--primary, #1f2937)` becomes a preset defined as itself, a cycle CSS discards: a block coloured "Primary" is transparent.
+- **A `:root` rule points the colour utilities at the presets**, so a colour changed in the Site Editor reaches the whole theme.
+
+The `theme.json` at the theme root stays the **base configuration**: layout sizes (`contentSize`, `wideSize`), appearance tools, and anything CSS does not express. When the base and `@theme` both define a slug, **the base wins**. So never copy the built file back over it: later edits to `app.css` would no longer reach the editor.
+
+Spacing and layout are not generated from `@theme`.
+
+## Blade templates and the hierarchy
+
+WordPress still decides which template a request needs; Pollora changes where it looks and how the result is rendered. For each candidate in the hierarchy, `.php` is swapped for `.blade.php` and looked up in `resources/views`, and Blade matches are put ahead of PHP files.
+
+| Request | Blade view |
+|---|---|
+| Single `book` post | `single-book.blade.php`, then `single.blade.php` |
+| Page | `page-about.blade.php`, then `page.blade.php` |
+| Category | `category.blade.php`, then `archive.blade.php` |
+| Not found | `404.blade.php` |
+| Anything else | `index.blade.php` |
+
+`index.blade.php` is the last resort. With no `404.blade.php`, Pollora renders Laravel's `errors.404` view with a 404 status.
+
+A template looks like this:
+
+```blade title="resources/views/single.blade.php"
+@extends('layouts.app')
+
+@section('content')
+    @posts
+        <article>
+            <h1>@title</h1>
+            @content
+        </article>
+    @endposts
+@endsection
+```
+
+`@posts`, `@title` and `@content` are not core Blade: they come from Sage Directives, which ships with the framework. And `{{ $value }}` escapes its output. The layout must still call `@wphead` and `@wpfooter`, because plugins and enqueued assets depend on them.
+
+<Aside type="tip" title="Which template answered?">
+With `WP_DEBUG` on, every page that came from the hierarchy carries an HTML comment such as `<!-- pollora:template="single" path="themes/x/resources/views/single.blade.php" -->`. It appears only for hierarchy responses, not for a `Route::wp()` or Laravel route, which answer before it.
+</Aside>
+
+## Assets: Vite and the `Asset` facade
+
+The theme is built with Vite (`vite.config.js` is generated) and Tailwind CSS v4, through the `@tailwindcss/vite` plugin. No `tailwind.config.js` is needed.
+
+You declare an asset with the `Asset` facade, in a **service provider**, not in a hook class:
+
+```php
+use Pollora\Support\Facades\Asset;
+
+Asset::add('theme-app', 'assets/js/app.js')
+    ->container('theme')
+    ->useVite()
+    ->toFrontend();
+```
+
+- `container('theme')` picks the theme's asset container (the framework declares `theme`, `plugin.<slug>` and `module.<slug>` itself).
+- `useVite()` goes through the build manifest, and through the dev server while `npm run dev` runs.
+- `toFrontend()`, `toBackend()`, `toEditor()`, `toLoginScreen()` and `toCustomizer()` say where the asset loads.
+
+A Vite script is enqueued as a WordPress **script module**, printed after WordPress's import map.
+
+To get a file's URL:
+
+```php
+$logo = (string) Asset::url('assets/images/logo.png');
+```
+
+`get_theme_file_uri()` works too and resolves through the same build: it returns the **built** (hashed) URL of a theme asset. However, a theme's own directory is not web-served on a Pollora project: only the build output under `/build/theme/{slug}` is. If you need a URL for a file, make it part of the Vite build. Likewise, `get_stylesheet_directory_uri()` and `get_template_directory_uri()` return a URL that does not serve your theme's files.
+
+To develop, from the theme folder: `npm install`, then `npm run dev`; for production, `npm run build`.
+
+## The second kind of theme: the block theme
+
+A Pollora theme can also be a **block theme** (Full Site Editing): its templates are `templates/*.html`, edited in the Site Editor, instead of Blade views.
+
+```bash
+php artisan pollora:make:theme my-journal --repository=pollora/theme-buzz
+```
+
+Nothing to configure: when no Blade view answers, Pollora lets WordPress resolve the block template itself and answers with the right status (`404.html` answers HTTP 404). Blade views still win where they exist, and a `Route::wp()` or Laravel route answers before any template, so don't declare routes for pages the block templates render.
+
+The layout rule fits in one sentence:
+
+> The theme root holds what WordPress reads itself; `resources/views/` holds Blade.
+
+```plaintext
+my-journal/
+├─ templates/        # block templates: index, single, page, archive, 404…
+├─ parts/            # template parts: header, footer
+├─ patterns/         # static patterns, registered by WordPress
+├─ resources/
+│  ├─ assets/        # CSS, JS, fonts: built by Vite
+│  └─ views/patterns/  # patterns that need Laravel, registered by Pollora
+├─ theme.json        # the design system; the build adds the @theme colours
+└─ style.css
+```
+
+`templates/` and `parts/` must be at the root: WordPress has no setting to move them. This is the layout the Site Editor exports, so an exported template drops into place.
+
+A static pattern is a `patterns/*.php` file (block markup under a header docblock). WordPress reads **only `.php` files** in that folder: an `.html` file there is silently ignored. A pattern that needs Laravel (configuration, a helper, a computed value) is a Blade view in `resources/views/patterns`, registered by Pollora.
+
+<Aside type="caution" title="The marker of a block theme">
+With `WP_DEBUG` on, the template marker of a block theme always reads `template="template-canvas"`, because WordPress renders every block template through `template-canvas.php`. Tell templates apart by the `<body>` classes (`single-post`, `search-results`, `error404`…).
+</Aside>
+
+Assets work as in a Blade theme (`Asset::add(...)->useVite()`). Here the root `theme.json` is the design system, and the build adds the `@theme` colours to it.
+
+## Check what you learned
+
+<Quiz title="Where does the design live?">
+You want to change the primary colour of a Blade theme so that the front end and the editor change together. Where do you make the change?
+
+- [x] In the `@theme static` block of `app.css`, then run the build
+- [ ] Directly in the generated `theme.json` under `public/build/`
+  > That file is written by the build: your edit would be overwritten at the next compile.
+- [ ] In the root `theme.json`, by copying the generated file over it
+  > Copying the generated file into the base is exactly what to avoid: the base wins over `@theme`, and later edits to `app.css` would no longer reach the editor.
+
+The design is declared once in `@theme`, with concrete values, and the build writes it into the `theme.json` WordPress reads.
+
+</Quiz>
+
+<Quiz title="Concrete values">
+Why write `--color-primary: #1f2937;` rather than `--color-primary: var(--wp--preset--color--primary, #1f2937);` in `@theme`?
+
+- [ ] Because Tailwind rejects `var()` functions
+  > Tailwind is not the problem: it is what the plugin does with the value.
+- [x] Because the plugin copies the value as it is, which would create a preset defined as itself
+- [ ] Because concrete values compile faster
+  > Speed does not come into it: a cyclic preset is discarded by CSS, and the block ends up transparent.
+
+A value in `var(--wp--preset--…)` becomes a cycle CSS discards.
+
+</Quiz>
+
+<Quiz title="Which file is read by whom?">
+In a block theme, what goes where?
+
+- [x] `templates/single.html` at the theme root, read by WordPress
+- [ ] `resources/views/templates/single.html`
+  > `templates/` and `parts/` must be at the root: WordPress has no setting to move them.
+- [x] A pattern that needs Laravel in `resources/views/patterns`, as Blade
+- [ ] A static pattern as `patterns/masthead.html`
+  > WordPress reads only `.php` files in `patterns/`: an `.html` file there is silently ignored.
+
+The root holds what WordPress reads itself; `resources/views` holds Blade.
+
+</Quiz>
+
+<Quiz title="Asset and Vite">
+What does `Asset::add('theme-app', 'assets/js/app.js')->container('theme')->useVite()->toFrontend()` do?
+
+- [ ] Prints the source file's path straight into the page
+  > The theme's source file is not served: only the build output is.
+- [x] Loads the theme's Vite build entry on the front end (the dev server while `npm run dev` runs)
+- [ ] Creates the entry in `vite.config.js`
+  > `vite.config.js` is generated with the theme; `Asset` does not edit it.
+
+The facade resolves the right file from the container and the build manifest; `toFrontend()` says where it loads.
+
+</Quiz>
+
+<Quiz title="Which template answered?">
+`WP_DEBUG` is on and you want to know which Blade template produced a post page. What do you look for in the HTML?
+
+- [ ] A `<meta name="template">` tag
+  > Pollora does not add a meta tag for this.
+- [x] A `<!-- pollora:template="single" path="…" -->` comment
+- [ ] The same comment, also for a page rendered by `Route::wp()`
+  > The comment appears only on hierarchy responses, not on `Route::wp()` or Laravel routes.
+
+That comment gives the template's name and the path of the view that answered.
+
+</Quiz>
+
+<QuizResults />
+
+## Going further
+
+- [Theme Structure](https://pollora.dev/theming/theme-structure/), including the block theme, the login screen and localisation
+- [Assets & Vite](https://pollora.dev/theming/assets-vite/)
+- [Blade templates in WordPress](https://pollora.dev/guides/blade-templates-wordpress/)
+- [Menus](https://pollora.dev/theming/menus/), to put Tailwind classes on `wp_nav_menu()`
+- [Patterns](https://pollora.dev/blocks/patterns/)
