@@ -1,0 +1,224 @@
+---
+title: "Module 3 · Blocs : Blade, InnerBlocks et Block Bindings"
+description: Écrire un bloc Gutenberg rendu par Blade, y placer des blocs enfants, et remplir des blocs du noyau avec des données serveur.
+sidebar:
+  label: 3 · Blocs
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/) et [Block Bindings](https://pollora.dev/blocks/block-bindings/).
+</Aside>
+
+**Durée : 60 min · Prérequis : les modules 1 et 2, et les bases de Gutenberg (qu'est-ce qu'un bloc, `block.json`).**
+
+À la fin de ce module, vous savez créer un bloc dont le rendu est un template Blade, y accueillir des blocs enfants, et alimenter un bloc du noyau avec une valeur calculée côté serveur.
+
+<Aside type="caution" title="Block Bindings : API expérimentale">
+La documentation marque les Block Bindings comme expérimentaux : l'API peut encore changer avant d'être déclarée stable. Ils demandent WordPress 6.9 ou plus ; Pollora installe WordPress 7.
+</Aside>
+
+## 1. Un bloc dynamique rendu par Blade
+
+Chaque bloc a son dossier dans `resources/views/blocks/`, à côté de vos autres vues Blade :
+
+```text
+resources/views/blocks/hero-banner/
+├── block.json         # métadonnées WordPress
+├── render.blade.php   # rendu serveur (par défaut)
+├── index.jsx          # point d'entrée : enregistre le bloc dans l'éditeur
+├── edit.jsx           # composant de l'éditeur
+├── editor.css / style.css / view.js
+```
+
+On le génère avec `php artisan pollora:make:block hero-banner --theme`. Il faut ensuite un build Vite (`npm install && npm run build`, ou `npm run dev` pour le rechargement à chaud) : la commande refuse un thème ou un plugin sans `package.json` ni `vite.config.js`.
+
+Les blocs sont **dynamiques par défaut** : `render.blade.php` les rend à chaque requête, et leur balisage n'est pas stocké dans `post_content`. Changer le template met donc à jour tous les blocs existants, sans l'erreur « This block contains unexpected or invalid content ».
+
+**Rien à enregistrer.** Pollora enregistre lui-même les blocs de chaque thème, plugin et module actif, à l'`init` de WordPress. Un `BlocksServiceProvider` est inutile (et un ancien reste inoffensif : il peut être supprimé).
+
+```blade title="resources/views/blocks/hero-banner/render.blade.php"
+<section {!! get_block_wrapper_attributes(['class' => 'py-16']) !!}>
+    <h2 class="text-3xl font-bold">{{ $attributes['heading'] ?? '' }}</h2>
+
+    {!! $content !!}
+</section>
+```
+
+Le template reçoit `$attributes` (tableau), `$content` (HTML des blocs enfants), `$block` (le `WP_Block`) et `$isPreview` (vrai dans l'aperçu de l'éditeur).
+
+<Aside type="caution" title="Piège : échapper ou non">
+`{{ }}` échappe. Réservez `{!! !!}` à `get_block_wrapper_attributes()` et à `$content`, que WordPress a déjà échappés. Pour une URL : `href="{{ esc_url_raw($url) }}"` (et pas `esc_url()`, qui encode déjà le HTML : un `&` ressortirait en `&amp;#038;`).
+</Aside>
+
+## 2. Des blocs enfants avec `<InnerBlocks />`
+
+Écrivez `<InnerBlocks />` là où vont les blocs enfants. Dans l'éditeur, ils s'éditent à cet endroit ; sur la page, ils remplacent la balise.
+
+```blade
+<article {!! get_block_wrapper_attributes(['class' => 'card']) !!}>
+    <h3>{{ $attributes['title'] ?? '' }}</h3>
+
+    <InnerBlocks
+        class="card__body"
+        allowedBlocks="{{ json_encode(['core/paragraph', 'core/list']) }}"
+    />
+</article>
+```
+
+- Les options sont celles des blocs enfants de Gutenberg (`allowedBlocks`, `template`, `templateLock`…). Écrivez le JSON avec `{{ json_encode(...) }}`.
+- **Une seule balise par bloc** : Gutenberg ne garde qu'une liste de blocs enfants. La première `<InnerBlocks />` l'obtient, les suivantes sont ignorées, dans l'éditeur comme sur la page.
+- Les blocs enfants sont stockés dans `post_content`, le reste du bloc non : modifier le template ne perd pas leur contenu.
+
+## 3. Block Bindings : remplir un bloc du noyau
+
+Un Block Binding remplit un attribut d'un bloc (le texte d'un paragraphe, l'URL d'un bouton) avec une valeur calculée côté serveur, au lieu de ce que l'éditeur a saisi. Une fiche événement peut ainsi se construire avec des blocs du noyau, sans bloc sur mesure.
+
+Une **source** est une classe marquée `#[BlockBinding]` ; chaque méthode publique marquée `#[BindingField]` est un champ.
+
+```php title="app/Cms/Bindings/EventBinding.php"
+use Pollora\Attributes\BlockBinding;
+use Pollora\Attributes\BlockBinding\BindingField;
+use Pollora\BlockBinding\Domain\Models\BindingContext;
+
+#[BlockBinding('acme/event', label: 'Event', postTypes: 'event')]
+final class EventBinding
+{
+    #[BindingField(label: 'Booking link', type: 'url')]
+    public function bookingUrl(BindingContext $context): string
+    {
+        return route('events.book', ['event' => $context->postId]);
+    }
+}
+```
+
+La classe est découverte automatiquement et résolue par le conteneur : son constructeur et chaque champ reçoivent leurs dépendances. Dans le bloc, on lie un attribut à un champ :
+
+```html
+<!-- wp:button {"metadata":{"bindings":{"url":{"source":"acme/event","args":{"field":"booking_url"}}}}} -->
+```
+
+Le nom du champ vient de la méthode en snake_case (`bookingUrl` donne `booking_url`). Le texte saisi dans le bloc n'est qu'un **repli** : il s'affiche quand le champ renvoie `null`.
+
+- **Un champ déclare son type de retour** : `string`, `int`, `float`, `bool`, un `Stringable` ou `null`. Un champ sans type de retour, ou qui renvoie un tableau, est signalé à la découverte.
+- **Pollora échappe la valeur selon l'endroit** où elle atterrit : texte échappé dans un paragraphe, URL assainie pour un champ `url` ou `image`. Une source ne peut pas l'oublier.
+- **Un champ qui lève une exception** est journalisé et traité comme `null` : une source défaillante ne casse pas la page (avec `APP_DEBUG` actif, l'exception remonte).
+- **Dans l'éditeur**, rien à écrire en JavaScript : on choisit le champ dans les réglages du bloc (« Attributs ») et l'aperçu montre la valeur calculée par le même code que la page. Un bloc lié à une source Pollora n'est pas modifiable depuis le canevas.
+
+### Les meta typées, déjà prêtes
+
+Pollora fournit quatre sources : `pollora/post-meta`, `pollora/term-meta`, `pollora/author-meta` et `pollora/option`. Celles qui lisent une meta la **formatent selon son type** (une date s'affiche comme une date) ; `format`, `decimals`, `fallback`… sont des arguments.
+
+```html
+<!-- wp:heading {"metadata":{"bindings":{"content":{"source":"pollora/post-meta","args":{"key":"starts_at","format":"l j F Y"}}}}} -->
+```
+
+### Rendre un bloc Blade « bindable »
+
+Listez ses attributs sous `pollora.bindings` dans `block.json`. Seul un bloc qui a un `render` peut l'être.
+
+```json
+{
+    "name": "acme/event-card",
+    "attributes": { "title": { "type": "string" } },
+    "pollora": { "bindings": ["title"] },
+    "render": "file:./render.blade.php"
+}
+```
+
+### Ce que les sources n'ont pas le droit de montrer
+
+N'importe qui peut éditer un article peut y lier n'importe quelle source : chaque source ne montre donc que ce qui peut être public.
+
+- le contenu doit être visible pour le visiteur (pas d'article non publié ni protégé par mot de passe) ;
+- une meta d'article ou de terme n'est montrée que si elle est déclarée `showInRest: true` et que sa clé ne commence pas par `_` ;
+- une meta d'utilisateur exige `#[Meta(public: true)]` pour `pollora/author-meta` ;
+- `pollora/option` ne lit que les options listées dans `config/block-bindings.php`, aucune par défaut.
+
+### Contrôler
+
+Un binding qui ne peut pas afficher sa valeur ne produit aucune erreur : le bloc garde son contenu enregistré. `php artisan pollora:doctor` lit les bindings écrits dans les templates, parties et motifs du thème, et nomme le fichier, le bloc et la raison. `php artisan pollora:binding:list` montre ce qui est liable.
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Enregistrer un bloc">
+Que faut-il écrire pour que le bloc de `resources/views/blocks/hero-banner/` soit enregistré ?
+
+- [ ] Un `BlocksServiceProvider` qui appelle `register_block_type()`
+  > Un fournisseur de services ne boote pas à temps : en HTTP, WordPress a déjà déclenché `init`. Pollora enregistre les blocs lui-même.
+- [x] Rien : Pollora enregistre les blocs de chaque thème, plugin et module actif
+- [ ] Une entrée dans `config/blocks.php`
+
+Il faut en revanche un build Vite pour les scripts et styles du bloc.
+
+</Quiz>
+
+<Quiz title="Échapper dans render.blade.php">
+Lesquelles de ces expressions peuvent s'écrire avec `{!! !!}` ?
+
+- [x] `get_block_wrapper_attributes(['class' => 'py-16'])`
+- [x] `$content`
+- [ ] `$attributes['heading']`
+  > Un attribut est une saisie de l'éditeur : il s'écrit avec `{{ }}`, qui échappe.
+- [ ] `esc_url($attributes['url'])`
+  > `esc_url()` encode déjà le HTML ; dans `{{ }}`, utilisez `esc_url_raw()`.
+
+Seuls les deux premiers ont déjà été échappés par WordPress.
+
+</Quiz>
+
+<Quiz title="Plusieurs zones de blocs enfants">
+Un template contient deux balises `<InnerBlocks />`. Que se passe-t-il ?
+
+- [ ] Les blocs enfants apparaissent aux deux endroits
+- [x] La première reçoit les blocs enfants, la seconde est ignorée
+  > Gutenberg garde une seule liste de blocs enfants par bloc, dans l'éditeur comme sur la page.
+- [ ] Pollora lève une erreur à l'enregistrement
+
+Gutenberg garde une seule liste de blocs enfants par bloc.
+
+</Quiz>
+
+<Quiz title="Un champ qui ne renvoie rien">
+Un paragraphe est lié à un champ qui renvoie `null`. Que voit le visiteur ?
+
+- [ ] Un paragraphe vide
+- [x] Le texte enregistré dans le bloc, utilisé comme repli
+- [ ] Une erreur, car le champ doit renvoyer une chaîne
+
+C'est aussi ce qui arrive quand le binding est mal configuré : pas d'erreur, d'où `pollora:doctor`.
+
+</Quiz>
+
+<Quiz title="Ce qu'un binding peut montrer">
+Quelles meta `pollora/post-meta` peut-il afficher sur une page publique ?
+
+- [x] Une meta déclarée avec `showInRest: true` et une clé comme `starts_at`
+- [ ] Une meta déclarée avec `showInRest: true` et une clé comme `_internal_ref`
+  > Une clé qui commence par `_` est protégée : jamais montrée.
+- [ ] N'importe quelle meta de l'article, quand l'utilisateur est connecté
+  > Aucune source ne lit le visiteur connecté : la valeur fuiterait par le cache de page.
+
+Un article non publié n'affiche rien de lui non plus.
+
+</Quiz>
+
+<QuizResults />
+
+## Exercice
+
+### Exercice 04 · Une source de Block Binding
+
+`lab/bin/lab reset 04`, puis modifiez `app/Cms/Bindings/SeatsBinding.php` dans `lab/academy-lab/`.
+
+**Objectif.** Donner à la source `academy/seats` un champ `remaining` qui renvoie la chaîne `12 seats left`, de façon qu'un paragraphe lié à ce champ affiche cette valeur à la place de son texte enregistré.
+
+`lab/bin/lab check 04` vérifie que la source est enregistrée auprès de WordPress, puis fait rendre un paragraphe lié et contrôle que la valeur du champ remplace le texte de repli.
+
+## Pour aller plus loin
+
+- [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/) : Tailwind dans les blocs, configuration Vite, migration depuis `resources/blocks`
+- [Block Bindings](https://pollora.dev/blocks/block-bindings/) : images et pièces jointes, `BindingContext`, performances
+- [Motifs de blocs](https://pollora.dev/blocks/patterns/)
