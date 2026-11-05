@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+#
+# Pollora Academy lab: install the practice project and grade the exercises.
+#
+#   lab setup            create the project (DDEV) and seed its content
+#   lab check  <NN>      run the tests of exercise NN
+#   lab reset  <NN>      put exercise NN back to its starting point
+#   lab solve  <NN>      copy the solution of exercise NN (spoiler)
+#   lab verify <NN>      maintainers: the starter must fail, the solution must pass
+set -euo pipefail
+
+LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="$LAB_DIR/academy-lab"
+POLLORA_CONSTRAINT='^13.40'
+
+die() { echo "lab: $*" >&2; exit 1; }
+
+exercise_dir() {
+  local number="${1:-}"
+  [[ "$number" =~ ^[0-9]{2}$ ]] || die "give the exercise number, for example: lab $2 01"
+  local match=("$LAB_DIR"/exercises/"$number"-*/)
+  [[ -d "${match[0]}" ]] || die "no exercise $number"
+  echo "${match[0]%/}"
+}
+
+require_project() {
+  [[ -d "$PROJECT_DIR/.ddev" ]] || die "the project is not installed yet: run 'lab setup' first"
+}
+
+in_project() { (cd "$PROJECT_DIR" && "$@"); }
+
+cmd_setup() {
+  command -v ddev >/dev/null || die "DDEV is required: https://ddev.readthedocs.io"
+  command -v pollora >/dev/null || die "the Pollora CLI is required: composer global require pollora/cli"
+
+  if [[ ! -d "$PROJECT_DIR/.ddev" ]]; then
+    (cd "$LAB_DIR" && pollora new academy-lab --ddev --stable --no-interaction)
+  fi
+
+  in_project ddev composer update "pollora/framework:$POLLORA_CONSTRAINT" --with-all-dependencies --no-interaction
+
+  if [[ -z "$(in_project ddev wp post list --post_type=page --name=contact --format=ids)" ]]; then
+    in_project ddev wp post create --post_type=page --post_title=Contact --post_name=contact --post_status=publish --porcelain >/dev/null
+  fi
+
+  mkdir -p "$PROJECT_DIR/tests/Feature/Lab"
+  cp "$LAB_DIR/support/tests/LabTestCase.php" "$PROJECT_DIR/tests/LabTestCase.php"
+
+  echo "Lab ready: $(in_project ddev composer show pollora/framework | grep -E '^versions' | tr -d '*')"
+  echo "Next: lab reset 01, then read the exercise on the site and run: lab check 01"
+}
+
+cmd_check() {
+  local dir; dir="$(exercise_dir "${1:-}" check)"
+  require_project
+  rm -rf "$PROJECT_DIR/tests/Feature/Lab" && mkdir -p "$PROJECT_DIR/tests/Feature/Lab"
+  cp "$dir"/tests/*.php "$PROJECT_DIR/tests/Feature/Lab/"
+  # Classes added or edited since the last run must be discovered again
+  in_project ddev exec php artisan discovery:clear >/dev/null
+  # WordPress cannot be loaded twice in one process: one process per test
+  in_project ddev exec vendor/bin/phpunit --process-isolation tests/Feature/Lab
+}
+
+cmd_reset() {
+  local dir; dir="$(exercise_dir "${1:-}" reset)"
+  require_project
+  cp -r "$dir"/starter/. "$PROJECT_DIR"/
+  echo "Exercise ${1} is back to its starting point."
+}
+
+cmd_solve() {
+  local dir; dir="$(exercise_dir "${1:-}" solve)"
+  require_project
+  cp -r "$dir"/solution/. "$PROJECT_DIR"/
+  echo "Solution of exercise ${1} copied into the project."
+}
+
+cmd_verify() {
+  local number="${1:-}"
+  cmd_reset "$number" >/dev/null
+  if cmd_check "$number" >/dev/null 2>&1; then
+    die "exercise $number: the starter passes, the test checks nothing"
+  fi
+  cmd_solve "$number" >/dev/null
+  cmd_check "$number" >/dev/null 2>&1 || { cmd_check "$number" || true; die "exercise $number: the solution fails"; }
+  cmd_reset "$number" >/dev/null
+  echo "Exercise $number: the starter fails, the solution passes."
+}
+
+case "${1:-}" in
+  setup)  cmd_setup ;;
+  check)  cmd_check "${2:-}" ;;
+  reset)  cmd_reset "${2:-}" ;;
+  solve)  cmd_solve "${2:-}" ;;
+  verify) cmd_verify "${2:-}" ;;
+  *) sed -n "2,9p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

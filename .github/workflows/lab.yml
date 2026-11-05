@@ -1,0 +1,38 @@
+name: Lab
+
+on:
+  push:
+    branches: [main]
+    paths: ['lab/**', '.github/workflows/lab.yml']
+  pull_request:
+    paths: ['lab/**', '.github/workflows/lab.yml']
+  schedule:
+    # Pollora ships often: catch an exercise a new release breaks
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ddev/github-action-setup-ddev@v1
+        with:
+          autostart: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer:v2
+      - name: Install the Pollora CLI
+        run: composer global require pollora/cli --no-interaction && composer global config bin-dir --absolute --quiet >> "$GITHUB_PATH"
+      - name: Create the lab project
+        run: lab/bin/lab setup
+      - name: Every exercise fails at the start and passes with its solution
+        run: |
+          for dir in lab/exercises/*/; do
+            number="$(basename "$dir" | cut -c1-2)"
+            lab/bin/lab verify "$number"
+          done
