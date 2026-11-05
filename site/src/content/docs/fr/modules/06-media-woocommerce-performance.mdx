@@ -1,0 +1,311 @@
+---
+title: "Module 6 · Médias, WooCommerce et performance"
+description: Stocker la médiathèque sur un disque Laravel, écrire une boutique WooCommerce en Blade, alléger les routes d'API et déboguer avec Debugbar et pollora:doctor.
+sidebar:
+  label: 6 · Médias et performance
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Media Storage](https://pollora.dev/advanced/media/), [WooCommerce](https://pollora.dev/advanced/woocommerce/), [WP Rocket](https://pollora.dev/advanced/wp-rocket/), [Debugging](https://pollora.dev/advanced/debugging/), [Dashboard & Status](https://pollora.dev/advanced/dashboard/), [WordPress Routes](https://pollora.dev/routing/wordpress-routes/) et [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/).
+</Aside>
+
+**Durée : 50 min · Prérequis : le module 1 (Route::wp(), auto-découverte).**
+
+À la fin de ce module, vous savez sortir les fichiers de la médiathèque du serveur web, brancher une boutique WooCommerce sur Blade, garder les endpoints rapides légers et diagnostiquer un projet qui échoue sans erreur.
+
+## 1. Médiathèque sur un disque Laravel
+
+Pollora peut garder la médiathèque WordPress sur n'importe quel disque Laravel (local, S3, R2, Scaleway, MinIO) avec **deux réglages** : le disque (`media.disk`) et l'URL publique (`media.url`). WordPress continue d'utiliser ses propres fonctions de fichiers : Gutenberg, ACF, Meta Box, WooCommerce et les imports suivent sans adaptation. Le stockage est le paquet `pollora/media`, que le framework requiert.
+
+Le module est **désactivé par défaut** : sans `media.disk`, WordPress garde son dossier `public/content/uploads` et rien ne change.
+
+On déclare le disque comme n'importe quel disque Laravel, dans `config/filesystems.php`, puis on le désigne dans `.env` :
+
+```php title="config/filesystems.php"
+'disks' => [
+    'media' => [
+        'driver' => 's3',
+        'key' => env('MEDIA_KEY'),
+        'secret' => env('MEDIA_SECRET'),
+        'region' => env('MEDIA_REGION'),
+        'bucket' => env('MEDIA_BUCKET'),
+        'endpoint' => env('MEDIA_ENDPOINT'),   // R2, Scaleway, MinIO…
+        'url' => env('MEDIA_URL'),
+    ],
+],
+```
+
+```env title=".env"
+MEDIA_DISK=media
+MEDIA_URL=https://media.example.com
+```
+
+Pour S3 ou un service compatible, installez aussi le pilote Flysystem : `composer require league/flysystem-aws-s3-v3`. Les autres options (`cache_control`, `private.expiry`, `async_thumbnails`, `legacy_urls`) se règlent dans `config/media.php`, publié avec `php artisan vendor:publish --tag=media-config`.
+
+**Une URL de média est construite, jamais demandée** : l'URL publique plus le chemin relatif du fichier. Aucun appel au disque n'a lieu pendant le rendu d'une page publique. WordPress stocke des chemins relatifs : changer de disque ne casse rien tant que `media.url` ne bouge pas.
+
+Pour déplacer une médiathèque existante :
+
+```bash
+php artisan pollora:media:migrate --from=uploads --to=media             # simulation
+php artisan pollora:media:migrate --from=uploads --to=media --execute   # copie
+```
+
+La commande peut être relancée après une interruption et ne modifie jamais la source. `--replace-urls` remplace l'ancienne URL de base dans la base de données.
+
+<Aside type="caution" title="Piège : les dossiers privés">
+Certains dossiers d'`uploads` ne doivent pas être publics (téléchargements protégés WooCommerce, journaux, pièces jointes de formulaires, sauvegardes). Le serveur web les protège là où ils sont ; un disque public les servirait à quiconque connaît l'URL. Excluez-les à la migration : `--exclude='woocommerce_uploads/*' --exclude='wc-logs/*'`. `pollora:doctor` avertit si l'un d'eux se trouve sur le disque média.
+</Aside>
+
+Un plugin qui écrit à la main sous `WP_CONTENT_DIR . '/uploads'` ignore le filtre `upload_dir` : ses fichiers restent locaux. Gardez aussi les journaux WooCommerce (`uploads/wc-logs`) sur un chemin local.
+
+## 2. Déclarer ses tailles d'image en PHP
+
+Plutôt que de laisser WordPress fabriquer toutes les tailles enregistrées pour chaque image, déclarez celles que votre design utilise avec la facade `ImageSize`, là où l'application démarre (un service provider, par exemple) :
+
+```php
+use Pollora\Media\Domain\Enums\Anchor;
+use Pollora\Support\Facades\ImageSize;
+
+ImageSize::add('card')->cover(600, 400)->webp(75);
+ImageSize::add('hero')->scale(width: 1920)->webp(70)->widths([640, 1024, 1440]);
+ImageSize::add('thumb')->cover(150, 150)->eager();
+ImageSize::add('portrait')->cover(400, 500, Anchor::Top);
+```
+
+Une taille s'utilise ensuite par son nom, comme n'importe quelle taille WordPress : `wp_get_attachment_image($id, 'card')`, `the_post_thumbnail('hero')`.
+
+- Le **mode d'ajustement** est obligatoire : `cover()` (recadre), `scale()` (garde le ratio), `contain()` (tient dans la boîte).
+- Le format par défaut est **WebP, qualité 80** ; `avif()` et `original()` existent.
+- `widths([...])` ajoute des largeurs pour le `srcset` ; `eager()` fabrique la taille à l'envoi ; `upscale()` autorise l'agrandissement (désactivé par défaut).
+- Un GIF n'est jamais redimensionné, pour ne pas casser son animation.
+
+**L'URL d'une taille est calculée, jamais lue** : elle vient des métadonnées de l'original et d'une signature (HMAC de l'original et des paramètres, avec la clé de l'application). Modifier une taille change donc son nom : aucun cache ne garde un fichier périmé. Les tailles que WordPress enregistre lui-même (`add_image_size()`, WooCommerce, le noyau) ne sont pas touchées, sauf si vous déclarez une taille du même nom.
+
+### Servies à la demande
+
+Une taille n'est fabriquée à l'envoi que si elle est `eager()`. Les autres le sont **à la première requête de leur URL** : le serveur web ne trouve pas le fichier, passe la main à PHP, qui fabrique la taille au chemin exact de l'URL et la renvoie ; les requêtes suivantes sont servies par le serveur web ou le CDN, sans PHP.
+
+- **Disque local** : Nginx et Apache envoient déjà un fichier manquant à PHP, rien à configurer.
+- **S3 derrière un CDN** : l'origine du CDN pour la médiathèque est le site (une règle côté CDN).
+- **S3 sans CDN** : il n'y a **pas de repli**. Déclarez les tailles utilisées en `eager()` et lancez `php artisan pollora:media:thumbs:warm`.
+
+Ce que dit l'URL n'est pas cru sur parole : le nom doit être celui d'une taille déclarée, la signature celle que le site aurait produite, l'original ne doit être ni privé ni un GIF. Sinon, `404`, sans coût. La fabrication est aussi bornée (`thumbnails.max_pixels`, `concurrency`, `wait`).
+
+### Ou par un service
+
+Pour une très grande médiathèque, `thumbnails.driver` (`pollora`, `bunny` ou `imgproxy`) confie les tailles à un service. La déclaration PHP ne change pas, seule la forme de l'URL change : une classe d'image Bunny Optimizer, ou une URL imgproxy signée qui ne nomme qu'un preset. `php artisan pollora:media:thumbs:export --driver=bunny|imgproxy` exporte vos tailles vers le service. Avec un service, aucun fichier n'est fabriqué par le site.
+
+## 3. Fichiers privés signés
+
+Un média est privé quand sa meta `_pollora_media_private` vaut `1`, ou quand le filtre `pollora/media/is_private` le dit. Il est alors servi par une **URL signée** qui expire après `media.private.expiry` (`+6 hours` par défaut), tailles et `srcset` compris. Rien dans l'administration ne marque un média comme privé : on le fait en ligne de commande, en code ou par règle.
+
+```bash
+php artisan pollora:media:visibility 42 --private
+php artisan pollora:media:visibility 42 --public
+```
+
+La signature est faite par le disque Laravel (`temporaryUrl()`), donc il faut un magasin d'objets.
+
+<Aside type="caution" title="Piège : un disque local ne signe rien">
+Sur un disque qui ne sait pas signer, comme un disque local simple, un média privé est servi avec son **URL simple**, pas avec une URL cassée. `pollora:doctor` le signale. Un média privé demande un magasin d'objets, ou votre propre signature via le filtre `pollora/media/signed_url`.
+</Aside>
+
+Quelques commandes utiles : `pollora:media:status` (disque, URL publique, écriture de test), `pollora:media:files {id}` (les fichiers d'un média) et `pollora:media:thumbs:prune` (supprime les fichiers d'une taille modifiée ou retirée, en simulation sans `--execute`).
+
+## 4. WooCommerce en Blade
+
+Le framework a livré l'intégration WooCommerce, mais ne le fait plus : elle vit dans le paquet `pollora/woocommerce`.
+
+```bash
+composer require pollora/woocommerce
+```
+
+<Aside type="caution" title="Piège : sans le paquet, rien ne le dit">
+Un projet qui exécute WooCommerce **doit** installer le paquet. Sans lui, la boutique n'a ni gabarits Blade, ni conditions `Route::wp()` (`shop`, `product`, `cart`…), ni page « Bientôt disponible », ni événements WooCommerce, et **rien ne signale l'erreur**. `php artisan pollora:doctor` (et Outils › Santé du site) avertit quand WooCommerce est actif et que le paquet manque.
+</Aside>
+
+**Gabarits Blade.** WooCommerce cherche un gabarit dans le thème, puis dans son propre dossier. Le paquet ajoute à la recherche la variante Blade de chaque candidat : `resources/views/woocommerce/single-product.blade.php` répond là où `woocommerce/single-product.php` l'aurait fait. Les gabarits partiels (`wc_get_template_part()`) et `wc_get_template()` se résolvent de la même façon.
+
+**Conditions de routes.** `Route::wp()` connaît les conditions de WooCommerce :
+
+```php
+Route::wp('shop', [ShopController::class, 'index']);
+Route::wp('product', [ProductController::class, 'show']);
+```
+
+| Alias | Condition |
+|---|---|
+| `shop` | `is_shop` |
+| `product` | `is_product` |
+| `cart` | `is_cart` |
+| `checkout` | `is_checkout` |
+| `account` | `is_account_page` |
+| `product_category` | `is_product_category` |
+| `product_tag` | `is_product_tag` |
+| `wc_endpoint` | `is_wc_endpoint_url` |
+
+Les entrées de `wordpress.plugin_conditions.woocommerce` l'emportent sur ces valeurs par défaut.
+
+**Page « Bientôt disponible ».** WooCommerce la rend lui-même puis s'arrête, ce qui contourne Blade. Avec une vue `woocommerce.coming-soon` dans votre thème (ou `woocommerce.coming-soon-store-only` quand seules les pages de la boutique sont masquées), le paquet rend celle-ci à la place.
+
+**Événements.** Les actions de WooCommerce arrivent en événements Laravel, dans `Pollora\WooCommerce\Events` : `OrderStatusChanged`, `AttributeCreated` / `Updated` / `Deleted`, `TaxRateCreated` / `Updated` / `Deleted` et `SettingUpdated`.
+
+```php
+use Illuminate\Support\Facades\Event;
+use Pollora\WooCommerce\Events\OrderStatusChanged;
+
+Event::listen(OrderStatusChanged::class, function (OrderStatusChanged $event): void {
+    $event->order;      // WC_Order
+    $event->newStatus;
+});
+```
+
+## 5. WP Rocket : ne pas toucher aux fichiers du projet
+
+WP Rocket écrit ses règles dans `.htaccess` et définit `WP_CACHE` dans `wp-config.php`. Dans un projet Pollora, les règles du serveur web et les constantes appartiennent au projet. Le paquet `pollora/wp-rocket` dit à WP Rocket de ne faire ni l'un ni l'autre, sauf demande explicite.
+
+```bash
+composer require pollora/wp-rocket
+```
+
+Deux réglages sous la clé `wprocket` de `config/wordpress.php`, tous deux à `false` par défaut : `generate_htaccess` et `set_cache_constant`. Le cache de pages de WP Rocket a besoin que `WP_CACHE` soit `true` : définissez-le vous-même.
+
+```php title="config/wordpress.php"
+'constants' => [
+    'WP_CACHE' => true,
+],
+```
+
+N'activez `generate_htaccess` que si le serveur lit un `.htaccess` présent dans la racine publique de Pollora (Apache) ; avec Nginx, les règles générées sont inutiles. Comme pour WooCommerce, sans le paquet WP Rocket écrit dans `.htaccess` et définit `WP_CACHE` tout seul, sans erreur.
+
+## 6. Performance : des routes d'API légères
+
+Chaque requête web démarre Laravel **et** un `wp-settings.php` complet, plugins compris. Le seul moyen intégré d'en charger moins est le mode léger des routes `/api/*`, définies dans le `routes/api.php` d'un thème ou d'un plugin.
+
+```php title="themes/my-theme/routes/api.php"
+Route::get('/products/search', ProductSearchController::class);
+// → GET /api/products/search
+```
+
+Dans ce mode, WordPress se charge **sans plugins** (le thème reste chargé) : la documentation annonce environ 100 ms contre 1,3 s. C'est le réglage `wordpress.api_plugins` :
+
+```php title="config/wordpress.php"
+'api_plugins' => [],                      // aucun plugin (défaut)
+'api_plugins' => ['woocommerce'],         // sélection
+'api_plugins' => ['woocommerce*'],        // motif glob
+'api_plugins' => ['*'],                   // tous : le mode léger est désactivé
+```
+
+<Aside type="caution" title="Piège : les fonctions de plugin n'existent pas">
+Avec le réglage par défaut, `wc_get_product()` ou `get_permalink()` ne sont pas disponibles dans un handler d'API. Utilisez Eloquent ou la facade `DB`, ajoutez le plugin à `api_plugins`, ou prévoyez un repli avec `function_exists()`.
+</Aside>
+
+Choisissez les routes `/api/` pour les endpoints critiques (suggestions de recherche, autocomplétion, tableaux de bord) et l'API REST de WordPress (`/wp-json/`) quand il vous faut tout le contexte WordPress (éditeur Gutenberg, plugins tiers).
+
+**En-têtes de cache HTTP.** Le middleware `WordPressHeaders` remplace, pour les visiteurs non connectés et sur les réponses HTML, les en-têtes « no-cache » de WordPress par `public, must-revalidate, max-age=…`. La durée par défaut est de 3600 secondes (`WP_CACHE_MAX_AGE`), avec des durées par condition (`wordpress.cache.ttl`) et `s-maxage` en option. Il respecte `DONOTCACHEPAGE` et tout `max-age`, `s-maxage` ou `no-store` posé par l'application.
+
+**Cache de découverte.** Hors mode debug, les scans de l'auto-découverte sont mis en cache ; en `APP_DEBUG=true`, chaque requête scanne le disque. Une classe ajoutée après le remplissage du cache n'est pas découverte avant `php artisan discovery:clear` (et `pollora:doctor` nomme les classes absentes du cache).
+
+## 7. Déboguer : Debugbar et `pollora:doctor`
+
+`pollora/debugbar` met WordPress et Pollora dans Laravel Debugbar : quelle route ou quel gabarit a répondu, les requêtes passées par `$wpdb` (**WP Queries**), les hooks déclenchés, les appels `wp_remote_*`, le cache d'objet, les blocs, les assets, la chronologie… Le but est de rendre Query Monitor inutile.
+
+```bash
+composer require --dev pollora/debugbar
+```
+
+C'est une dépendance de développement **volontairement** : `composer install --no-dev` l'exclut, donc un déploiement en production ne l'embarque jamais. Elle tourne exactement quand Laravel Debugbar tourne (`DEBUGBAR_ENABLED`, ou `APP_DEBUG` à défaut) et jamais dans les environnements `production` ou `testing`. Pour garder les onglets de Laravel sans ceux de Pollora : `DEBUGBAR_POLLORA_ENABLED=false`. Les requêtes REST et admin-ajax y apparaissent aussi, grâce à l'en-tête `phpdebugbar-id`.
+
+`php artisan pollora:status` dit **ce qui est là** (versions, post types, hooks, cache de découverte, thème). `php artisan pollora:doctor` dit **si ça marche**, avec la commande qui répare sous chaque problème. Il cherche les échecs silencieux : correctif du noyau absent, `patches.lock.json` périmé, `.env` avec des noms que Pollora ne lit pas, cache de configuration ou de routes hors production, cache de découverte en retard, builds de thème manquants, actions asynchrones ignorées…
+
+- Il sort avec le code `1` si un contrôle trouve une **erreur** (les avertissements sortent à `0`) : il peut donc bloquer un déploiement ou un job de CI.
+- `--json` produit la même chose pour des scripts.
+- Les mêmes contrôles apparaissent dans Outils › Santé du site, avec deux de plus que seule une requête web peut faire (tous les blocs sont enregistrés ; la racine du serveur est `public/`).
+
+<Aside type="tip" title="Premier réflexe">
+Quand quelque chose échoue sans message (une boutique sans gabarits, un rôle absent, une classe non enregistrée), lancez d'abord `pollora:doctor`.
+</Aside>
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Un média privé sur un disque local">
+Vous marquez un média privé sur un site dont le disque `media` est un disque local simple. Que se passe-t-il ?
+
+- [ ] Le média est servi avec une URL signée valable 6 heures
+  > La signature est faite par le disque Laravel (`temporaryUrl()`) : un disque local simple ne sait pas signer.
+- [x] Le média est servi avec son URL simple, et `pollora:doctor` le signale
+- [ ] L'URL du média renvoie une erreur 403
+  > Le module sert l'URL simple plutôt qu'une URL cassée.
+
+Un média privé demande un magasin d'objets, ou votre propre signature via `pollora/media/signed_url`.
+
+</Quiz>
+
+<Quiz title="Des tailles sur S3 sans CDN">
+Votre médiathèque est sur S3, sans CDN devant le bucket, et vous déclarez `ImageSize::add('card')->cover(600, 400)`. Comment garantir que le fichier `card` existe ?
+
+- [ ] Rien à faire : la première requête de l'URL fabriquera la taille
+  > Cela suppose que le serveur web renvoie un fichier manquant vers PHP. Avec S3 sans CDN, il n'y a pas de repli.
+- [x] La déclarer `eager()` et lancer `pollora:media:thumbs:warm` pour les images déjà envoyées
+- [ ] Passer `async_thumbnails` à `true`
+  > Cela diffère la fabrication des tailles de WordPress après l'envoi, ça ne crée pas de repli.
+
+L'URL d'une taille est calculée : elle ne change pas, que le fichier existe ou non.
+
+</Quiz>
+
+<Quiz title="WooCommerce sans le paquet">
+WooCommerce est actif, mais `pollora/woocommerce` n'est pas installé. Que constatez-vous ?
+
+- [ ] Une exception au démarrage de l'application
+  > Rien ne le signale : c'est justement le piège.
+- [ ] La boutique fonctionne, seuls les événements manquent
+  > Les gabarits Blade, les conditions `Route::wp()` et la page « Bientôt disponible » manquent aussi.
+- [x] Pas de gabarits Blade ni de conditions `shop` / `product` / `cart`, aucun message ; `pollora:doctor` avertit
+
+Les anciens noms de classes du framework continuent de fonctionner une fois le paquet installé.
+
+</Quiz>
+
+<Quiz title="Un handler d'API et WooCommerce">
+Un endpoint `GET /api/products/search` appelle `wc_get_product()`. Avec la configuration par défaut, qu'obtenez-vous, et que faire ?
+
+- [ ] Ça fonctionne : les routes `/api/` chargent tous les plugins
+  > Par défaut `api_plugins` est vide : aucun plugin n'est chargé.
+- [x] La fonction n'existe pas : ajouter `woocommerce` à `wordpress.api_plugins`, ou lire la base avec Eloquent ou `DB`
+- [ ] La route est refusée, car `/api/` est réservé à l'API REST de WordPress
+  > Les routes `/api/` sont des routes Laravel ordinaires, séparées de `/wp-json/`.
+
+Mettre `['*']` fonctionne aussi, mais désactive le mode léger.
+
+</Quiz>
+
+<Quiz title="Un projet qui exécute WP Rocket">
+`pollora/wp-rocket` est installé, avec la configuration par défaut. Quelles affirmations sont vraies ?
+
+- [x] WP Rocket n'écrit pas dans `.htaccess`
+- [x] WP Rocket ne définit pas `WP_CACHE` : c'est à vous de le faire, par exemple avec `wordpress.constants`
+- [ ] Il suffit d'installer le paquet pour que le cache de pages fonctionne
+  > Le cache de pages a besoin que `WP_CACHE` soit `true`, et le paquet ne le définit pas par défaut.
+- [ ] `generate_htaccess` est utile avec Nginx
+  > Les règles générées ne servent qu'à un serveur qui lit un `.htaccess` (Apache).
+
+Sans le paquet, WP Rocket écrit `.htaccess` et définit `WP_CACHE` tout seul, sans erreur.
+
+</Quiz>
+
+<QuizResults />
+
+## Pour aller plus loin
+
+- [Media Storage](https://pollora.dev/advanced/media/) : migration, Bunny et imgproxy, hooks, usage hors Laravel
+- [WooCommerce](https://pollora.dev/advanced/woocommerce/) et [WP Rocket](https://pollora.dev/advanced/wp-rocket/)
+- [WordPress Routes](https://pollora.dev/routing/wordpress-routes/#theme--plugin-api-routes) : routes d'API de thème et de plugin, mode léger
+- [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/) : le parcours d'une requête, ses compromis de performance
+- [Debugging](https://pollora.dev/advanced/debugging/) : onglets, configuration, ajouter ses propres données, passer de Query Monitor
+- [Dashboard & Status](https://pollora.dev/advanced/dashboard/) : `pollora:status` et la liste des contrôles de `pollora:doctor`
+- [Auto-Discovery](https://pollora.dev/core-concepts/auto-discovery/) : cache et dépannage
