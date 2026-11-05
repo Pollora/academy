@@ -26,6 +26,7 @@ Edit the files in `lab/academy-lab/` with your editor. The project is not commit
 | 02 | The capacity of an event is a typed meta | `#[Meta]` |
 | 03 | The event manager role is declared in code | `#[Role]` |
 | 04 | A paragraph is filled by a Block Binding source | `#[BlockBinding]` |
+| 05 | Titles are prefixed by a filter declared with an attribute | `#[Filter]` |
 
 Each one has `starter/` (the files you start from), `solution/` and `tests/`. `lab verify NN` checks that the starter fails and the solution passes: it is what CI runs.
 
