@@ -8,3 +8,4 @@ dist/
 .idea/
 .vscode/
 npm-debug.log*
+.worktrees/

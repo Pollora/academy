@@ -1,0 +1,224 @@
+---
+title: "Module 3 · Blocks: Blade, InnerBlocks and Block Bindings"
+description: Write a Gutenberg block rendered by Blade, put inner blocks in it, and fill core blocks with server data.
+sidebar:
+  label: 3 · Blocks
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. Facts come from the official documentation: [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/) and [Block Bindings](https://pollora.dev/blocks/block-bindings/).
+</Aside>
+
+**Duration: 60 min · Prerequisites: modules 1 and 2, and the basics of Gutenberg (what a block is, `block.json`).**
+
+By the end of this module you can create a block whose rendering is a Blade template, host inner blocks in it, and feed a core block with a value computed on the server.
+
+<Aside type="caution" title="Block Bindings: experimental API">
+The documentation marks Block Bindings as experimental: the API may still change before it is declared stable. They need WordPress 6.9 or later; Pollora installs WordPress 7.
+</Aside>
+
+## 1. A dynamic block rendered by Blade
+
+Each block has its own folder in `resources/views/blocks/`, next to your other Blade views:
+
+```text
+resources/views/blocks/hero-banner/
+├── block.json         # WordPress metadata
+├── render.blade.php   # server render (default)
+├── index.jsx          # entry point: registers the block in the editor
+├── edit.jsx           # editor component
+├── editor.css / style.css / view.js
+```
+
+Generate it with `php artisan pollora:make:block hero-banner --theme`. A Vite build follows (`npm install && npm run build`, or `npm run dev` for hot reload): the command refuses a theme or plugin that has no `package.json` or no `vite.config.js`.
+
+Blocks are **dynamic by default**: `render.blade.php` renders them on each request, and their markup is not stored in `post_content`. Changing the template updates every existing block, without the "This block contains unexpected or invalid content" error.
+
+**Nothing to register.** Pollora registers the blocks of every active theme, plugin and module itself, on WordPress `init`. A `BlocksServiceProvider` is useless (and an old one is harmless: it can be deleted).
+
+```blade title="resources/views/blocks/hero-banner/render.blade.php"
+<section {!! get_block_wrapper_attributes(['class' => 'py-16']) !!}>
+    <h2 class="text-3xl font-bold">{{ $attributes['heading'] ?? '' }}</h2>
+
+    {!! $content !!}
+</section>
+```
+
+The template receives `$attributes` (array), `$content` (the inner blocks HTML), `$block` (the `WP_Block`) and `$isPreview` (true in the editor's preview).
+
+<Aside type="caution" title="Trap: escaping or not">
+`{{ }}` escapes. Keep `{!! !!}` for `get_block_wrapper_attributes()` and `$content`, which WordPress already escaped. For a URL: `href="{{ esc_url_raw($url) }}"` (not `esc_url()`, which already HTML-encodes: an `&` would come out as `&amp;#038;`).
+</Aside>
+
+## 2. Inner blocks with `<InnerBlocks />`
+
+Write `<InnerBlocks />` where the inner blocks go. In the editor they are edited right there; on the page they replace the tag.
+
+```blade
+<article {!! get_block_wrapper_attributes(['class' => 'card']) !!}>
+    <h3>{{ $attributes['title'] ?? '' }}</h3>
+
+    <InnerBlocks
+        class="card__body"
+        allowedBlocks="{{ json_encode(['core/paragraph', 'core/list']) }}"
+    />
+</article>
+```
+
+- The options are those of Gutenberg's inner blocks (`allowedBlocks`, `template`, `templateLock`…). Write the JSON with `{{ json_encode(...) }}`.
+- **One tag per block**: Gutenberg keeps a single list of inner blocks. The first `<InnerBlocks />` gets it, any further tag is dropped, in the editor and on the page.
+- The inner blocks are stored in `post_content`, the rest of the block is not: changing the template does not lose their content.
+
+## 3. Block Bindings: filling a core block
+
+A Block Binding fills an attribute of a block (a paragraph's text, a button's URL) with a value computed on the server, instead of what the editor typed. An event sheet can then be built from core blocks, with no custom block.
+
+A **source** is a class marked `#[BlockBinding]`; each public method marked `#[BindingField]` is a field.
+
+```php title="app/Cms/Bindings/EventBinding.php"
+use Pollora\Attributes\BlockBinding;
+use Pollora\Attributes\BlockBinding\BindingField;
+use Pollora\BlockBinding\Domain\Models\BindingContext;
+
+#[BlockBinding('acme/event', label: 'Event', postTypes: 'event')]
+final class EventBinding
+{
+    #[BindingField(label: 'Booking link', type: 'url')]
+    public function bookingUrl(BindingContext $context): string
+    {
+        return route('events.book', ['event' => $context->postId]);
+    }
+}
+```
+
+The class is discovered automatically and resolved by the container: its constructor and each field receive their dependencies. In the block, an attribute is bound to a field:
+
+```html
+<!-- wp:button {"metadata":{"bindings":{"url":{"source":"acme/event","args":{"field":"booking_url"}}}}} -->
+```
+
+The field name comes from the method in snake_case (`bookingUrl` gives `booking_url`). The text typed in the block is only a **fallback**: it shows when the field returns `null`.
+
+- **A field declares its return type**: `string`, `int`, `float`, `bool`, a `Stringable` or `null`. A field with no return type, or returning an array, is reported at discovery.
+- **Pollora escapes the value for the place it lands in**: escaped text in a paragraph, a sanitized URL for a `url` or `image` field. A source cannot forget to.
+- **A field that throws** is logged and treated as `null`: a failing source never takes a page down (with `APP_DEBUG` on, the exception is thrown).
+- **In the editor** there is nothing to write in JavaScript: pick the field in the block settings ("Attributes") and the preview shows the value computed by the same code as the page. A block bound to a Pollora source cannot be edited from the canvas.
+
+### Typed meta, ready to use
+
+Pollora ships four sources: `pollora/post-meta`, `pollora/term-meta`, `pollora/author-meta` and `pollora/option`. Those reading a meta **format it by its type** (a date reads as a date); `format`, `decimals`, `fallback`… are arguments.
+
+```html
+<!-- wp:heading {"metadata":{"bindings":{"content":{"source":"pollora/post-meta","args":{"key":"starts_at","format":"l j F Y"}}}}} -->
+```
+
+### Making a Blade block "bindable"
+
+List its attributes under `pollora.bindings` in `block.json`. Only a block that has a `render` can be bound.
+
+```json
+{
+    "name": "acme/event-card",
+    "attributes": { "title": { "type": "string" } },
+    "pollora": { "bindings": ["title"] },
+    "render": "file:./render.blade.php"
+}
+```
+
+### What sources may not show
+
+Anyone who can edit a post can bind any source to it, so each source only shows what may be public.
+
+- the content must be visible to the visitor (no unpublished or password-protected post);
+- a post or term meta is shown only if it is declared `showInRest: true` and its key does not start with `_`;
+- a user meta needs `#[Meta(public: true)]` for `pollora/author-meta`;
+- `pollora/option` only reads the options listed in `config/block-bindings.php`, none by default.
+
+### Checking
+
+A binding that cannot show its value gives no error: the block keeps its saved content. `php artisan pollora:doctor` reads the bindings written in the theme's templates, parts and patterns, and names the file, the block and the reason. `php artisan pollora:binding:list` shows what can be bound.
+
+## Check what you remember
+
+<Quiz title="Registering a block">
+What must you write for the block in `resources/views/blocks/hero-banner/` to be registered?
+
+- [ ] A `BlocksServiceProvider` calling `register_block_type()`
+  > A service provider does not boot in time: over HTTP, WordPress has already fired `init`. Pollora registers blocks itself.
+- [x] Nothing: Pollora registers the blocks of every active theme, plugin and module
+- [ ] An entry in `config/blocks.php`
+
+You do need a Vite build for the block's scripts and styles.
+
+</Quiz>
+
+<Quiz title="Escaping in render.blade.php">
+Which of these expressions can be written with `{!! !!}`?
+
+- [x] `get_block_wrapper_attributes(['class' => 'py-16'])`
+- [x] `$content`
+- [ ] `$attributes['heading']`
+  > An attribute is editor input: write it with `{{ }}`, which escapes.
+- [ ] `esc_url($attributes['url'])`
+  > `esc_url()` already HTML-encodes; inside `{{ }}`, use `esc_url_raw()`.
+
+Only the first two were already escaped by WordPress.
+
+</Quiz>
+
+<Quiz title="Several inner-block areas">
+A template contains two `<InnerBlocks />` tags. What happens?
+
+- [ ] The inner blocks appear in both places
+- [x] The first gets the inner blocks, the second is dropped
+  > Gutenberg keeps a single list of inner blocks per block, in the editor and on the page.
+- [ ] Pollora throws an error at registration
+
+Gutenberg keeps one list of inner blocks per block.
+
+</Quiz>
+
+<Quiz title="A field returning nothing">
+A paragraph is bound to a field that returns `null`. What does the visitor see?
+
+- [ ] An empty paragraph
+- [x] The text saved in the block, used as a fallback
+- [ ] An error, because the field must return a string
+
+The same happens when the binding is misconfigured: no error, hence `pollora:doctor`.
+
+</Quiz>
+
+<Quiz title="What a binding may show">
+Which meta can `pollora/post-meta` display on a public page?
+
+- [x] A meta declared with `showInRest: true` and a key like `starts_at`
+- [ ] A meta declared with `showInRest: true` and a key like `_internal_ref`
+  > A key starting with `_` is protected: never shown.
+- [ ] Any meta of the post, when the user is logged in
+  > No source reads the logged-in visitor: the value would leak through the page cache.
+
+An unpublished post shows nothing of itself either.
+
+</Quiz>
+
+<QuizResults />
+
+## Exercise
+
+### Exercise 04 · A Block Binding source
+
+`lab/bin/lab reset 04`, then edit `app/Cms/Bindings/SeatsBinding.php` in `lab/academy-lab/`.
+
+**Goal.** Give the `academy/seats` source a `remaining` field that returns the string `12 seats left`, so a paragraph bound to that field shows this value in place of its saved text.
+
+`lab/bin/lab check 04` checks that the source is registered with WordPress, then renders a bound paragraph and checks that the field's value replaces the fallback text.
+
+## Going further
+
+- [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/): Tailwind in blocks, Vite configuration, migrating from `resources/blocks`
+- [Block Bindings](https://pollora.dev/blocks/block-bindings/): images and attachments, `BindingContext`, performance
+- [Block patterns](https://pollora.dev/blocks/patterns/)
