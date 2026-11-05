@@ -1,0 +1,232 @@
+---
+title: "Module 11 · Abilities : exposer votre site aux agents"
+description: Déclarer ce que votre site sait faire avec l'API Abilities de WordPress, pour que des agents IA et des clients MCP le découvrent et l'appellent, avec des permissions qui le protègent.
+sidebar:
+  label: 11 · Abilities
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. L'API Abilities demande WordPress 6.9 ou plus ; sur une installation plus ancienne, les déclarations sont acceptées mais jamais publiées. Faits issus de la documentation officielle : [Abilities](https://pollora.dev/advanced/abilities/), [Nectar overview](https://pollora.dev/nectar/overview/) et [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/).
+</Aside>
+
+**Durée : 45-60 min · Prérequis : les modules 1 et 2.**
+
+À la fin de ce module, vous savez déclarer une ability avec l'attribut `#[Ability]` ou la facade `Ability`, décrire ses entrées, la protéger par une vérification de permission, et expliquer en quoi elle diffère du serveur MCP de Nectar.
+
+## 1. Deux choses différentes pour les agents
+
+Les deux touchent aux agents IA et à MCP, d'où la confusion. Elles répondent à des questions différentes.
+
+| | Nectar | Abilities |
+|---|---|---|
+| Sert | **votre** agent de code, pendant que vous construisez le site | les agents et outils d'automatisation qui **utilisent** le site |
+| Ce qu'il apporte | du contexte Pollora : guidelines, skills, outils MCP en lecture seule comme `post_types_info` | des fonctions que votre site déclare : entrées, sorties, permissions, comportement |
+| Où ça tourne | `local` et `development` uniquement | partout où vous déclarez les abilities |
+| Qui l'écrit | l'équipe Pollora | vous |
+
+Le guide sur les agents de code est explicite : les outils de Nectar travaillent sur le **code**, inspecté pendant le développement, et Nectar ne se charge pas en production. L'API Abilities va dans l'autre sens : WordPress 6.9 a introduit un registre où plugins, thèmes et noyau déclarent ce qu'ils savent faire sous forme lisible par une machine, pour que des agents découvrent et invoquent les fonctions du site sans intégration sur mesure pour chacune.
+
+## 2. Déclarer une ability
+
+Pollora enveloppe l'API dans le paquet `pollora/abilities`, avec deux façons de déclarer : l'**attribut déclaratif `#[Ability]`** et la **facade impérative `Ability`**. Utilisez l'attribut dès que ça dépasse quelques lignes.
+
+Une classe portant `#[Ability]` implémente `AbilityHandler` : l'attribut dit ce que l'ability *est*, le handler ce qu'elle *fait*.
+
+```php title="app/Abilities/CreatePost.php"
+use Pollora\Abilities\Domain\Contracts\AbilityHandler;
+use Pollora\Abilities\Domain\Model\Behaviour;
+use Pollora\Abilities\Domain\Model\Input;
+use Pollora\Abilities\Domain\Schema\SchemaBuilder;
+use Pollora\Attributes\Ability;
+
+#[Ability(
+    name: 'acme/create-post',
+    description: 'Creates a post from a title and a status.',
+    category: 'acme-content',
+    behaviour: Behaviour::Creates,
+)]
+final class CreatePost implements AbilityHandler
+{
+    public function schema(SchemaBuilder $schema): void
+    {
+        $schema->string('title', 'Title of the post to create.', required: true);
+        $schema->enum('status', 'Publication status.', ['draft', 'publish'], default: 'draft');
+    }
+
+    public function authorize(Input $input): mixed
+    {
+        return current_user_can('edit_posts')
+            ?: new WP_Error('forbidden', 'You cannot create posts.', ['status' => 403]);
+    }
+
+    public function handle(Input $input): mixed
+    {
+        return ['id' => wp_insert_post([
+            'post_title'  => $input->string('title'),
+            'post_status' => $input->string('status', 'draft'),
+        ])];
+    }
+}
+```
+
+La classe est découverte partout où le système de découverte scanne (`app/`, un thème, un module) et instanciée par le conteneur : l'injection par constructeur fonctionne. Une classe marquée `#[Ability]` qui n'implémente pas `AbilityHandler` est journalisée comme une erreur, pas ignorée.
+
+Les paramètres de l'attribut sont `name`, `description` et `category` (obligatoires), `label` et `behaviour` (facultatifs ; `behaviour` vaut `Behaviour::Reads` par défaut). La `description` est la description d'outil que lit l'agent.
+
+La même chose avec la facade, pratique pour une ability courte :
+
+```php
+use Pollora\Abilities\Domain\Model\Input;
+use Pollora\Abilities\Domain\Schema\SchemaBuilder;
+use Pollora\Support\Facades\Ability;
+
+Ability::define('acme/get-posts')
+    ->description('Returns the most recent posts, newest first.')
+    ->category('acme-content')
+    ->input(fn (SchemaBuilder $schema) => $schema
+        ->integer('limit', 'How many posts to return.', default: 10, minimum: 1, maximum: 100))
+    ->can(fn (Input $input): bool => current_user_can('edit_posts'))
+    ->using(fn (Input $input): array => array_map(
+        static fn (WP_Post $post): array => ['id' => $post->ID, 'title' => $post->post_title],
+        get_posts(['numberposts' => $input->integer('limit', 10)]),
+    ));
+```
+
+- Rien n'est enregistré tant qu'un corps n'est pas fourni par `using()` ou `handledBy()`.
+- Un nom est `namespace/slug`, en minuscules alphanumériques séparées par des tirets simples. Pollora refuse à la déclaration un slug seul, un libellé ou une description vides, ou un schéma d'entrée qui n'est pas un objet.
+- Vous déclarez là où c'est naturel (un fournisseur de services, une classe découverte). Pollora met la déclaration en file et la publie sur `wp_abilities_api_categories_init` puis `wp_abilities_api_init` ; vous n'accrochez jamais ces hooks vous-même.
+
+### Les catégories
+
+Chaque ability est rangée dans une catégorie, qui doit exister d'abord :
+
+```php
+Ability::category('acme-content', 'Editorial', 'Posts and pages.');
+```
+
+Les slugs sont globaux à l'installation et le noyau de WordPress en réserve déjà plusieurs : préfixez les vôtres. Une collision n'est pas bénigne : le second enregistrement est refusé et toutes les abilities pointant vers la catégorie échouent avec lui. Si la catégorie nommée par un `#[Ability]` n'a jamais été déclarée, Pollora la déclare pour vous.
+
+## 3. Le schéma est l'interface
+
+Le schéma d'entrée est la seule documentation qu'un modèle de langage reçoit sur votre ability. Chaque méthode de `SchemaBuilder` prend une description, et il n'existe pas de surcharge qui l'omette. WordPress valide l'entrée contre le schéma avant que votre corps ne s'exécute.
+
+- Préférez `enum()` à une chaîne libre quand les valeurs acceptées sont connues : un modèle qui voit les options en choisit une, un modèle à qui l'on donne une chaîne libre invente une valeur plausible.
+- Posez un `maximum` sur tout ce qui dimensionne une requête, pour qu'un modèle ne puisse pas demander toutes les lignes de la table.
+- `output()` est facultatif ; déclarez-le quand la forme renvoyée est stable, pour qu'un client puisse valider ce qu'il reçoit.
+
+Dans le corps, `Input` est un lecteur défensif (`string()`, `integer()`, `boolean()`, `id()`...). Ses accesseurs convertissent au lieu de lever : `"12"` envoyé pour un entier donne un appel qui fonctionne.
+
+## 4. Ce qui rend une ability découvrable, et comment les agents l'atteignent
+
+Une ability est découvrable dès qu'elle est **enregistrée** dans le registre des abilities de WordPress : un nom, une description, une catégorie et un schéma. Les abilities enregistrées sont exposées par les contrôleurs REST du noyau :
+
+```text
+GET  /wp-json/wp-abilities/v1/abilities
+GET  /wp-json/wp-abilities/v1/abilities/acme/get-posts
+POST /wp-json/wp-abilities/v1/abilities/acme/get-posts/run
+```
+
+Le plugin [MCP Adapter](https://github.com/WordPress/mcp-adapter) publie les abilities enregistrées via le Model Context Protocol. Une ability n'est pas un outil MCP, mais c'est de quoi un outil MCP est le plus souvent fait. Vous déclarez l'ability une fois, et ce qui consomme des abilities la reprend.
+
+C'est pourquoi le paquet porte le nom d'abilities et non de MCP : `pollora/abilities` n'implémente aucune partie du protocole.
+
+<Aside type="note" title="Hors du périmètre">
+La documentation ne décrit pas comment configurer Claude Code (ou un autre client) face au point d'accès MCP d'un site ; ce module non plus. Reportez-vous à la documentation de MCP Adapter pour cela.
+</Aside>
+
+## 5. Sécurité : c'est la vérification de permission qui protège le site
+
+- **Refus par défaut.** Omettre `can()` (facade) fait que l'ability refuse tout. Une vérification oubliée rend l'ability inutile, pas publique.
+- **Même entrée que le corps.** La vérification reçoit la même entrée, donc elle peut être par objet : `current_user_can('edit_post', $input->id('id'))` plutôt qu'un `edit_posts` global.
+- **Expliquer les refus.** Renvoyez un `WP_Error` plutôt que `false` : un client qui sait pourquoi peut agir.
+- **Le comportement est indicatif.** Chaque ability déclare ce qu'elle fait au site : `reads()` (par défaut), `creates()`, `updates()` ou `deletes()`, ou `Behaviour::Reads`, `Creates`, `Updates`, `Deletes` avec l'attribut. WordPress le publie sous `meta.annotations`, et les clients le convertissent en `readOnlyHint`, `destructiveHint` et `idempotentHint` pour décider du degré de précaution d'un appel : une lecture peut tourner sans surveillance, une suppression se confirme. **WordPress ne le fait pas respecter.** C'est le callback de permission qui protège le site.
+- Se tromper de comportement est pire que l'omettre : une ability qui modifie, déclarée `Reads`, invite aux appels sans surveillance.
+
+Une règle raisonnable en découle : exposez la capacité la plus étroite qui fait le travail, donnez-lui la vérification de permission la plus étroite, et commencez par des lectures.
+
+## 6. À essayer sur votre projet
+
+Il n'y a pas d'exercice de laboratoire pour ce module. Sur un projet Pollora sous WordPress 6.9 ou plus :
+
+1. Créez une ability en lecture seule `acme/get-posts` avec l'exemple de facade ci-dessus, dans un fournisseur de services (remplacez `acme` et la catégorie par un préfixe qui appartient à votre projet).
+2. Lancez `php artisan discovery:clear` si vous l'avez écrite comme classe.
+3. Appelez-la sans client MCP : `wp eval '$a = wp_get_ability("acme/get-posts"); var_dump($a->execute(["limit" => 3]));'`, ou `GET /wp-json/wp-abilities/v1/abilities`.
+4. Retirez l'appel à `can()` et relancez : elle doit maintenant être refusée.
+5. Facultatif : avec la skill `pollora-abilities` de Nectar, demandez à Claude Code d'écrire une seconde ability, puis relisez vous-même son `behaviour` et sa vérification de permission.
+
+Une classe handler se teste aussi sans WordPress : appelez directement `schema()`, `authorize()` et `handle()`.
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Nectar ou Abilities ?">
+Vous voulez qu'un agent de code sache quels types de contenu votre projet enregistre pendant que vous développez. Qu'est-ce qui convient ?
+
+- [ ] Une ability, déclarée avec `#[Ability]`
+  > Les abilities sont ce que votre site offre aux agents qui l'utilisent, pas du contexte pour l'agent du développeur.
+- [x] Le serveur MCP de Nectar, avec un outil comme `post_types_info`
+- [ ] Le plugin MCP Adapter seul
+
+Nectar est réservé au développement et en lecture seule.
+
+</Quiz>
+
+<Quiz title="Développement ou exécution ?">
+Quelle affirmation est correcte ?
+
+- [ ] Abilities et Nectar ne se chargent qu'en `local` et `development`
+  > Seul Nectar est réservé au développement. Les abilities sont déclarées par le site et peuvent être servies en production.
+- [x] Nectar ne se charge qu'en `local` et `development` ; les abilities sont déclarées par votre site et ne sont pas liées au développement
+- [ ] Les abilities ont besoin de Nectar pour être enregistrées
+
+Les abilities demandent WordPress 6.9 ou plus, pas Nectar.
+
+</Quiz>
+
+<Quiz title="Une vérification de permission oubliée">
+Une ability déclarée avec la facade n'a pas de `can()`. Que se passe-t-il quand un agent l'appelle ?
+
+- [ ] Elle s'exécute, tant que l'entrée respecte le schéma
+- [x] Elle refuse tout
+  > Les vérifications de permission refusent par défaut : une vérification oubliée rend l'ability inutile, pas publique.
+- [ ] Elle ne s'exécute que pour les administrateurs
+
+C'est voulu.
+
+</Quiz>
+
+<Quiz title="Ce que fait le comportement">
+Une ability utilise `Behaviour::Deletes`. Qu'est-ce que cela garantit ?
+
+- [ ] WordPress bloque l'appel pour les utilisateurs qui ne peuvent pas supprimer
+  > WordPress ne fait pas respecter le comportement.
+- [x] Les clients savent qu'elle est destructive et peuvent demander confirmation, mais seul le callback de permission protège le site
+- [ ] L'ability est masquée du point d'accès REST
+
+Les annotations sont de simples indications.
+
+</Quiz>
+
+<Quiz title="Ce qui rend une ability découvrable">
+Que faut-il à une ability pour être listée par le registre des abilities et comprise par un agent ?
+
+- [x] Un nom `namespace/slug` enregistré, une description, une catégorie et un schéma d'entrée décrit
+- [ ] Une route dans `routes/web.php` par ability
+  > Les abilities enregistrées sont exposées par les contrôleurs REST du noyau et par MCP Adapter.
+- [ ] Un nom réduit à un slug, comme `get-posts`
+  > Un slug seul n'enregistre rien ; Pollora le refuse à la déclaration.
+
+La description et celles du schéma sont ce que lit l'agent.
+
+</Quiz>
+
+<QuizResults />
+
+## Pour aller plus loin
+
+- [Abilities](https://pollora.dev/advanced/abilities/) : accesseurs d'`Input`, `has()` contre `filled()`, API du paquet
+- [Nectar overview](https://pollora.dev/nectar/overview/) : le serveur MCP côté développement et la skill `pollora-abilities`
+- [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/)
+- [Discovery](https://pollora.dev/core-concepts/auto-discovery/) : comment les classes `#[Ability]` sont trouvées
