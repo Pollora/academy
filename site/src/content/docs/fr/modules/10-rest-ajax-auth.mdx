@@ -1,0 +1,308 @@
+---
+title: "Module 10 · REST, AJAX et authentification"
+description: Exposer du comportement par une route REST, un handler AJAX ou une route /api, et savoir qui a le droit de l'appeler.
+sidebar:
+  label: 10 · REST, AJAX, authentification
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [REST API](https://pollora.dev/advanced/rest-api/), [AJAX](https://pollora.dev/advanced/ajax/), [Authentication](https://pollora.dev/advanced/authentication/), [Middleware](https://pollora.dev/routing/middleware/), [WordPress Routes](https://pollora.dev/routing/wordpress-routes/) et [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/).
+</Aside>
+
+**Durée : 60 min · Prérequis : les modules 1 et 2 (le rôle et la capacité WordPress, vus au module 2, servent ici).**
+
+À la fin de ce module, vous choisissez entre une route REST, un handler AJAX et une route `/api` pour exposer un comportement, vous les déclarez sans appeler `register_rest_route()` ni `add_action('wp_ajax_…')`, et vous savez qui peut les appeler.
+
+## 1. Une route REST WordPress : `#[WpRestRoute]`
+
+Une classe porte `#[WpRestRoute]` (espace de noms, route, permission) ; chaque méthode porte `#[Method]`. Pollora trouve la classe par l'auto-découverte et enregistre l'endpoint dans WordPress.
+
+```php title="app/Cms/Api/DocumentAPI.php"
+use Pollora\Attributes\WpRestRoute;
+use Pollora\Attributes\WpRestRoute\Method;
+use Pollora\WpRest\Permissions\Everyone;
+use WP_REST_Response;
+
+#[WpRestRoute(
+    namespace: 'app/v2',
+    route: 'document/(?P<documentId>\\d+)',
+    permissionCallback: Everyone::class
+)]
+class DocumentAPI
+{
+    #[Method('GET')]
+    public function get(int $documentId): WP_REST_Response
+    {
+        return new WP_REST_Response(['success' => true, 'documentId' => $documentId]);
+    }
+}
+```
+
+Cette classe répond à `GET wp-json/app/v2/document/18`. La route accepte des expressions régulières, et les paramètres arrivent dans la méthode (`$documentId`). Les méthodes HTTP admises sont `GET`, `POST`, `PUT`, `DELETE` et `PATCH` ; une autre lève une exception à l'enregistrement. `#[Method(['POST', 'DELETE'])]` en accepte plusieurs.
+
+### Les permissions : public ou privé, il faut le dire
+
+La permission se pose sur la classe (`permissionCallback` de `#[WpRestRoute]`) ou sur la méthode (`permissionCallback` de `#[Method]`). **Celle de la méthode remplace celle de la classe.**
+
+- `Everyone::class` : tout le monde, connecté ou non. C'est ainsi qu'on déclare une route publique.
+- `IsLoggedIn::class` : un utilisateur connecté.
+- `IsAdmin::class` : un administrateur.
+- `new Can('edit_posts')` : un utilisateur qui a cette capacité WordPress.
+
+```php
+use Pollora\WpRest\Permissions\Can;
+use Pollora\WpRest\Permissions\IsAdmin;
+use Pollora\WpRest\Permissions\IsLoggedIn;
+
+#[WpRestRoute('app/v1', 'events/(?P<id>\\d+)', permissionCallback: new Can('edit_posts'))]
+class EventAPI
+{
+    #[Method('GET', permissionCallback: new Can(EventCap::ExportAttendees))]
+    public function attendees(int $id): array {}
+
+    #[Method('PUT', permissionCallback: new Can('edit_post', parameter: 'id'))]
+    public function update(int $id): array {}
+}
+```
+
+`Can` prend des arguments, donc on passe **une instance** (`new Can(…)`), alors que `IsAdmin` se passe en nom de classe. Son paramètre `capability` est une capacité ou un cas d'enum `#[CapabilitySet]` (module 2). Son paramètre `parameter` désigne un paramètre de la requête transmis avec la capacité : c'est ce qui permet une capacité méta comme `edit_post` sur l'article visé. Un invité est refusé avec un statut 401, un utilisateur connecté sans la capacité avec un 403.
+
+Une classe de permission maison implémente `Pollora\Attributes\WpRestRoute\Permission` et sa méthode `allow()`, qui renvoie `true`, `false` ou une `WP_Error`.
+
+<Aside type="caution" title="Piège : une route sans permission est refusée">
+Depuis `pollora/wp-rest` 2.0 (framework 13.39.3), une route `#[WpRestRoute]` qui ne nomme **aucune** permission est refusée : `rest_forbidden`, statut 401 pour un visiteur et 403 pour un utilisateur connecté. Donnez `Everyone::class` à une route publique voulue, ou une vraie permission. Les routes enregistrées à la main avec `register_rest_route()` ne sont pas concernées.
+
+Avant la 2.0, une route sans permission restait publique (avec un `_doing_it_wrong()`). Pour garder ce comportement le temps d'une migration, le filtre `pollora/wp-rest/private_by_default` peut renvoyer `false`.
+</Aside>
+
+## 2. Un handler AJAX : `#[Ajax]` et la facade
+
+Le handler AJAX passe par `admin-ajax` de WordPress. Deux écritures, le même résultat. Dans les deux cas, **par défaut, seuls les utilisateurs connectés** peuvent l'appeler.
+
+```php
+use Pollora\Attributes\Ajax;
+use Pollora\Ajax\Domain\Model\AjaxAccess;
+
+class NewsletterHandler
+{
+    #[Ajax('subscribe')]                                  // connectés (défaut)
+    public function subscribe(): void
+    {
+        wp_send_json_success(['message' => 'Subscribed!']);
+    }
+
+    #[Ajax('load_more', access: AjaxAccess::ALL)]         // tout le monde
+    public function loadMore(): void {}
+
+    #[Ajax('track_visit', access: AjaxAccess::GUEST)]     // invités seulement
+    public function trackVisit(): void {}
+}
+```
+
+```php
+use Pollora\Support\Facades\Ajax;
+
+Ajax::listen('my_action', fn () => wp_send_json_success());                  // connectés
+Ajax::listen('public_action', fn () => wp_send_json_success())->forAllUsers();
+Ajax::listen('guest_action', fn () => wp_send_json_success())->forGuestUsers();
+Ajax::listen('load_more_posts', [PostController::class, 'loadMore']);
+```
+
+| `AjaxAccess` | Hooks WordPress | Qui |
+|---|---|---|
+| `LOGGED` (défaut) | `wp_ajax_{action}` | Connectés seulement |
+| `ALL` | `wp_ajax_{action}` + `wp_ajax_nopriv_{action}` | Tout le monde |
+| `GUEST` | `wp_ajax_nopriv_{action}` | Invités seulement |
+
+La classe d'un `#[Ajax]` est instanciée par le conteneur : l'injection par le constructeur fonctionne.
+
+### Le modèle de sécurité
+
+Exposer `wp_ajax_nopriv_*` laisse n'importe quel visiteur non authentifié appeler l'endpoint. La documentation en fait une décision consciente plutôt qu'un défaut implicite : la facade comme l'attribut exigent un **choix explicite** (`AjaxAccess::ALL`, `forAllUsers()`) pour ouvrir un handler au public.
+
+### Appeler le handler depuis le JavaScript
+
+```javascript
+jQuery.post(ajaxurl, {
+    action: 'my_action',
+    _wpnonce: myApp.nonce,
+    data: 'some data'
+}, function (response) {
+    if (response.success) {
+        console.log(response.data);
+    }
+});
+```
+
+Le script reçoit son nonce par `localize()`, côté PHP :
+
+```php
+use Pollora\Support\Facades\Asset;
+
+Asset::add('my-script', 'assets/js/app.js')
+    ->toFrontend()
+    ->localize('myApp', [
+        'nonce' => wp_create_nonce('wp_rest'),
+    ]);
+```
+
+Le nonce vient du **système de WordPress** (`wp_create_nonce()`). Le jeton CSRF de Laravel est un autre mécanisme : il dépend de la session Laravel (`PreventRequestForgery`) et n'existe pas sur toutes les routes (voir la section 3). WordPress garde ses propres cookies de connexion.
+
+## 3. Des routes `/api` en Laravel
+
+Un thème ou un plugin peut déposer `routes/api.php` à sa racine : ces routes sont préfixées par `/api` et ce sont de **vraies routes Laravel** (contrôleurs, middleware, groupes, limitation de débit).
+
+```php title="themes/my-theme/routes/api.php"
+use Illuminate\Support\Facades\Route;
+use Theme\MyTheme\Http\Controllers\Api\ProductSearchController;
+
+Route::get('/products/search', ProductSearchController::class);   // GET /api/products/search
+```
+
+Elles bénéficient du **mode léger** (module 1, performances au module 6) : WordPress se charge **sans les plugins** et le thème reste chargé. La clé `wordpress.api_plugins` de `config/wordpress.php` règle cela : `[]` (aucun, le défaut), une liste (`['woocommerce']`), des motifs (`['woocommerce*']`), ou `['*']` / `null` pour tout charger. Sans plugins, un handler s'appuie plutôt sur Eloquent ou la facade `DB` que sur des fonctions WordPress ou de plugin (`get_permalink()`, `wc_get_product()`).
+
+### Sessions et CSRF sur les routes WordPress
+
+- Les routes `Route::wp()` déclarées dans `routes/web.php` héritent du groupe `web` de Laravel : chaque requête démarre une session.
+- La hiérarchie de gabarits (la route fourre-tout `{any}`) n'a ni session, ni cookie, ni contrôle CSRF.
+- Avec `'sessions' => false` dans `config/wordpress.php`, les routes `Route::wp()` sautent `StartSession` et le middleware CSRF. Un `POST` reçu par une telle route n'est alors plus contrôlé : un formulaire qui exige validation ou CSRF de Laravel se déclare avec `Route::post()`. Les routes `Route::get()`, `Route::post()`… gardent tout le groupe `web`.
+
+## 4. Authentification : `Auth` avec des utilisateurs WordPress
+
+La facade `Auth` de Laravel fonctionne contre les comptes WordPress grâce à un garde, le `WordPressGuard`.
+
+```php
+use Illuminate\Support\Facades\Auth;
+
+Auth::check();                      // connecté via WordPress ?
+$user = Auth::user();               // l'utilisateur, ou null
+echo $user->display_name;
+
+Auth::attempt(['username' => $username, 'password' => $password, 'remember' => true]);
+Auth::once(['username' => $username, 'password' => $password]);   // le temps de la requête
+Auth::loginUsingId($userId);
+Auth::onceUsingId($userId);
+```
+
+Les identifiants de `attempt()` sont vérifiés par WordPress. Les variantes `once…` n'authentifient que pour la requête en cours et ne s'appuient pas sur la session. L'utilisateur authentifié est un `Pollora\Models\User`.
+
+### Vérifier un droit
+
+Le module 2 a posé les rôles et les capacités ; voici où les vérifier ici.
+
+```php
+$user = auth()->user();
+$user->can('edit_posts');
+$user->can('edit_post', $post);          // capacité méta
+Gate::authorize('manage_options');       // AuthorizationException (403)
+```
+
+```php
+Route::get('/reports', ReportController::class)->middleware('can:manage_options');
+```
+
+```blade
+@can('edit_post', $post)
+    <a href="{{ get_edit_post_link($post->ID) }}">Edit</a>
+@endcan
+```
+
+Un utilisateur sans la capacité reçoit une réponse 403 du middleware `can:`, et un invité est refusé. Le middleware `auth` s'applique aux routes WordPress comme aux autres (`Route::wp('page', …)->middleware('auth')`). Dans une route REST, c'est la permission `Can` de la section 1 qui joue ce rôle. Comme au module 2 : vérifiez une **capacité**, pas un rôle.
+
+## 5. Laquelle choisir ?
+
+| | REST `#[WpRestRoute]` | AJAX `#[Ajax]` | Route `/api` du thème ou plugin |
+|---|---|---|---|
+| Préfixe | `/wp-json/` | `admin-ajax` de WordPress (`ajaxurl`) | `/api/` |
+| Moteur | Infrastructure REST de WordPress | Hooks `wp_ajax_*` | Routeur Laravel |
+| Plugins chargés | Tous | — (non précisé par la documentation) | Configurable, aucun par défaut |
+| Temps de réponse indicatif | ~1,3 s | — | ~100 ms |
+| Accès par défaut | Refusé sans permission (`rest_forbidden`) | Connectés seulement | Celui de vos middleware |
+| Contrôle d'accès | Classes de permission (`Everyone`, `IsLoggedIn`, `IsAdmin`, `Can`) | `AjaxAccess` | Middleware Laravel (`auth`, `can:`) |
+| Authentification | Nonce WP / mots de passe d'application | Nonce `_wpnonce` dans l'exemple de la documentation | Middleware Laravel |
+| Accès aux données | `WP_Query` / `wpdb` | À votre main | Eloquent / `DB` |
+
+Les repères de la documentation : les routes `/api` pour les endpoints critiques en performance (suggestions de recherche, autocomplétion, tableaux de bord) ; l'API REST WordPress quand il faut le contexte WordPress complet (éditeur Gutenberg, intégrations de plugins tiers).
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="L'accès par défaut d'un handler AJAX">
+Que se passe-t-il pour `#[Ajax('subscribe')]` sans le paramètre `access` ?
+
+- [ ] Il est ouvert à tout le monde, comme `admin-ajax` classique
+  > C'est l'inverse : exposer `wp_ajax_nopriv_*` doit être un choix conscient.
+- [x] Il n'est accessible qu'aux utilisateurs connectés
+- [ ] Il est réservé aux administrateurs
+  > `AjaxAccess::LOGGED` vise les utilisateurs connectés, pas un rôle.
+
+Pour ouvrir un handler aux invités, on écrit `access: AjaxAccess::ALL` (ou `forAllUsers()` avec la facade).
+
+</Quiz>
+
+<Quiz title="Une route REST sans permission">
+Avec `pollora/wp-rest` 2.0, que renvoie une route `#[WpRestRoute]` qui ne nomme aucune permission, pour un visiteur anonyme ?
+
+- [ ] Elle est publique, avec un avertissement `_doing_it_wrong()`
+  > C'était le comportement d'avant la 2.0.
+- [x] Une erreur `rest_forbidden` avec le statut 401
+- [ ] Une erreur 500 à la découverte de la classe
+- [ ] Elle répond, mais sans données
+
+Pour une route publique voulue, on déclare `permissionCallback: Everyone::class`.
+
+</Quiz>
+
+<Quiz title="Une capacité pour une route REST">
+Comment réserver une méthode REST aux utilisateurs qui ont la capacité `export_attendees` ?
+
+- [ ] `permissionCallback: Can::class`
+  > `Can` prend des arguments : on passe une instance.
+- [x] `permissionCallback: new Can('export_attendees')`
+- [ ] `permissionCallback: IsAdmin::class`
+  > `IsAdmin` ne regarde pas votre capacité.
+- [ ] Un `if (current_user_can(…))` est obligatoire dans la méthode
+
+Un invité reçoit alors un 401, un utilisateur connecté sans la capacité un 403.
+
+</Quiz>
+
+<Quiz title="CSRF de Laravel et nonce WordPress">
+Avec `'sessions' => false` dans `config/wordpress.php`, un `POST` reçu par une route `Route::wp()` est-il contrôlé par le jeton CSRF de Laravel ?
+
+- [ ] Oui, le jeton est lu dans le nonce WordPress
+- [x] Non : le middleware CSRF est sauté ; pour un formulaire qui l'exige, on déclare la route avec `Route::post()`
+  > Les routes `Route::post()` gardent tout le groupe `web`.
+- [ ] Oui, la session est recréée à la volée
+  > Sans session, `csrf_token()` renvoie une chaîne vide.
+
+Le nonce est le système propre de WordPress ; le jeton CSRF dépend de la session Laravel.
+
+</Quiz>
+
+<Quiz title="Quelle route charge les plugins ?">
+Que charge par défaut WordPress pour une requête sur une route `/api/*` d'un thème ?
+
+- [ ] Tous les plugins, comme pour `/wp-json/`
+  > C'est le cas de l'API REST WordPress, pas des routes `/api`.
+- [x] Aucun plugin, mais le thème reste chargé
+- [ ] Ni plugins, ni thème
+  > Le thème reste chargé : routes, contrôleurs et services fonctionnent.
+- [ ] Seulement WooCommerce
+
+La clé `wordpress.api_plugins` ajoute des plugins (`['woocommerce']`) ou les charge tous (`['*']`).
+
+</Quiz>
+
+<QuizResults />
+
+## Pour aller plus loin
+
+- [REST API](https://pollora.dev/advanced/rest-api/) : permissions, méthodes, migration des routes sans permission
+- [AJAX](https://pollora.dev/advanced/ajax/) : facade, attribut, modèle de sécurité
+- [Authentication](https://pollora.dev/advanced/authentication/) : toutes les méthodes de `Auth`
+- [Middleware](https://pollora.dev/routing/middleware/) : middleware de Pollora, sessions et groupe `web`
+- [WordPress Routes](https://pollora.dev/routing/wordpress-routes/#theme--plugin-api-routes) : routes `/api` des thèmes et plugins, mode léger
+- [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/) : `can()`, `@can`, `can:`
