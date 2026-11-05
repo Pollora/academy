@@ -1,0 +1,294 @@
+---
+title: "Module 5 · Asynchrone, planification et modules"
+description: Sortir le travail lent de la requête, planifier des tâches récurrentes avec ce qu'il faut pour les exécuter, et choisir entre un module et un plugin.
+sidebar:
+  label: 5 · Async, planification, modules
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Les faits viennent de la documentation officielle ([actions asynchrones](https://pollora.dev/hooks/async-actions/), [planification](https://pollora.dev/advanced/scheduling/), [modules](https://pollora.dev/advanced/modules/)) : en cas de doute, c'est elle qui fait foi.
+</Aside>
+
+**Durée : 50 min · Prérequis : les modules 1 et 2 (hooks et attributs), et des notions de files d'attente Laravel.**
+
+À la fin de ce module, vous saurez rendre une action asynchrone sans la perdre, planifier une tâche récurrente en sachant **qui** va l'exécuter, et décider si un ensemble de fonctionnalités doit devenir un module ou un plugin.
+
+## Partie 1 · Les actions asynchrones
+
+Une action devient asynchrone en ajoutant `->async()` à son enregistrement, ou `#[Async]` à côté de `#[Action]`. Quand le hook se déclenche, le handler ne s'exécute pas dans la requête : il est mis en file, puis exécuté un peu plus tard par WP-Cron, Action Scheduler ou un worker de file Laravel. Un appel lent à un CRM ne ralentit plus l'enregistrement d'un article, et son échec ne fait plus échouer l'opération.
+
+```php
+use Pollora\Support\Facades\Action;
+
+Action::add('woocommerce_order_status_completed', [OrderExporter::class, 'export'])
+    ->async()
+    ->delay(60)
+    ->unique()
+    ->tries(3);
+```
+
+```php
+use Pollora\Attributes\Action;
+use Pollora\Attributes\Async;
+
+class SyncEventToCrm
+{
+    #[Action('save_post_event', priority: 20)]
+    #[Async(delay: 60, tries: 3, unique: true)]
+    public function handle(int $postId): void
+    {
+        // S'exécute après la requête, via le driver par défaut
+    }
+}
+```
+
+Supprimer la ligne `#[Async]` rend l'action de nouveau synchrone. Seules les **actions** peuvent être asynchrones : un filtre doit renvoyer une valeur à son appelant. Un handler asynchrone ne peut pas non plus modifier la requête en cours (redirection, affichage…).
+
+Pour générer la classe :
+
+```bash
+php artisan pollora:make:action SyncEventToCrm --hook=save_post_event --async
+```
+
+### Quatre règles à connaître d'abord
+
+1. **Au moins une fois, pas exactement une fois.** Une nouvelle tentative ou un hook déclenché deux fois peut exécuter le handler deux fois : vérifiez avant d'envoyer, faites un upsert plutôt qu'un insert.
+2. **Aucun ordre garanti** entre deux actions asynchrones sur le même hook.
+3. **Un délai variable** : quelques secondes avec un worker, et avec WP-Cron jusqu'à ce que quelque chose appelle `wp-cron.php`.
+4. **Préférez une classe à une closure** : une classe s'exécute dans la version déployée, une closure telle qu'elle était à la mise en file.
+
+### Ce qui voyage, et ce qui est refusé
+
+Les arguments du hook sont stockés au déclenchement, puis rechargés à l'exécution.
+
+| Argument | À l'exécution |
+|---|---|
+| Scalaire, tableau de scalaires | Identique |
+| `WP_Post`, `WP_Term`, `WP_User`, `WP_Comment` | Rechargé depuis son ID, dans son état du moment |
+| Modèle Eloquent | Rechargé depuis sa clé |
+| Enum, date | Reconstruit |
+| Objet `JsonSerializable` | Tableau |
+| **Tout autre objet** | **Refusé** |
+
+Un argument qui ne peut pas voyager lève une exception en mode debug. **En production**, l'action s'exécute de façon synchrone et l'incident va dans le journal Laravel : le travail est fait, mais dans la requête. Si un objet référencé a été supprimé entre-temps, le handler est ignoré, sauf avec `keepMissing`.
+
+D'autres paramètres typés par une classe sont résolus par le conteneur (`public function handle(int $postId, CrmClient $crm)`).
+
+### Capturer l'état au moment du déclenchement
+
+Entre le déclenchement et l'exécution, il n'y a plus d'utilisateur courant ni de données de requête. `capture()` s'exécute **dans la requête d'origine** et renvoie les valeurs à conserver, lisibles via `AsyncContext::get()`. Le site et la locale sont restaurés avant le handler ; l'utilisateur ne l'est pas, sauf avec `asUser`, ce qui fait échouer proprement une vérification de capacité.
+
+<Aside type="caution" title="Piège : les valeurs capturées restent en clair">
+Elles restent dans la base, en clair, jusqu'à l'exécution. Capturez un identifiant plutôt qu'une donnée personnelle, jamais un secret.
+</Aside>
+
+`when()` décide au déclenchement s'il faut mettre en file. C'est l'endroit pour écarter les révisions et les sauvegardes automatiques, et la première façon d'éviter qu'un hook très sollicité inonde la file (`unique` est la seconde).
+
+### Retries et échecs
+
+Si le handler lève une exception, il est remis en file après le délai `backoff` (par défaut 10, 60 puis 300 secondes), jusqu'à `tries` (1 par défaut : aucune nouvelle tentative sans le demander). Chaque échec définitif va dans le journal et déclenche l'action `pollora/async/failed`.
+
+### Les drivers, et ce qui doit les faire tourner
+
+| Driver | Exécuté par | Nécessite |
+|---|---|---|
+| `queue` | Un worker de file | Un worker sur la connexion |
+| `action-scheduler` | Le runner d'Action Scheduler | Un plugin qui l'embarque (WooCommerce…), et WP-Cron actif |
+| `wp-cron` | Le prochain passage de WP-Cron | WP-Cron actif |
+| `sync` | Immédiatement, dans la requête | Rien |
+
+Le driver par défaut est `auto`, résolu à chaque déclenchement : la file Laravel **seulement si `HOOKS_ASYNC_CONNECTION` désigne une connexion**, puis Action Scheduler s'il est disponible, puis WP-Cron. La file est optionnelle parce que le squelette livre `QUEUE_CONNECTION=database` : sinon, chaque action asynchrone d'un projet neuf attendrait un worker que personne n'a lancé. `via()` force un driver pour une action.
+
+<Aside type="caution" title="Piège : rien ne prévient quand le travail ne s'exécute jamais">
+Pollora définit `DISABLE_WP_CRON` : les chargements de page ne lancent jamais WP-Cron. Pour WP-Cron et Action Scheduler, il faut une vraie cron système (par exemple chaque minute, `curl -s https://example.com/cms/wp-cron.php` ou `wp cron event run --due-now`). Pour le driver `queue`, il faut un worker en continu (`php artisan queue:work database`), sous Supervisor ou systemd. `pollora:doctor` avertit quand des événements WP-Cron ont une heure de retard ou que des jobs attendent depuis quinze minutes.
+</Aside>
+
+### Tester et inspecter
+
+```php
+use Pollora\Hook\Async\Async;
+
+Async::fake();
+
+wp_update_post(['ID' => $event->ID, 'post_title' => 'New title']);
+
+Async::assertDispatched(SyncEventToCrm::class);
+Async::assertNotDispatched(Indexer::class);
+```
+
+`Async::fake()` enregistre ce qui serait mis en file sans l'exécuter ; `Async::runDispatched()` exécute ensuite ce qui a été enregistré. Sans `fake()`, `HOOKS_ASYNC_DRIVER=sync` exécute tout immédiatement, pratique pour les tests de bout en bout et dans le `.env` d'un développeur.
+
+```bash
+php artisan pollora:async:list           # --json disponible
+```
+
+La commande liste chaque action asynchrone (hook, handler, driver, délai, tentatives…), les drivers disponibles et le driver par défaut avec son origine. `pollora:doctor` signale aussi un `#[Async]` ignoré : une déclaration qui ne peut pas être honorée est journalisée et l'action s'exécute **de façon synchrone**.
+
+## Partie 2 · La planification
+
+Une tâche récurrente se déclare par un attribut `#[Schedule]` sur une méthode. Le moteur est le paquet `pollora/schedule`.
+
+```php
+use Pollora\Attributes\Schedule;
+use Pollora\Schedule\Every;
+use Pollora\Schedule\Interval;
+
+class Maintenance
+{
+    #[Schedule(Every::DAY)]
+    public function dailyBackup(): void {}
+
+    #[Schedule(new Interval(hours: 3, minutes: 30))]
+    public function checkFeeds(): void {}
+
+    #[Schedule(Every::DAY, hook: 'daily_cleanup', args: ['type' => 'full'])]
+    public function cleanup(array $args): void {}
+}
+```
+
+- **L'enum `Every`** (recommandé) : `HOUR`, `TWICE_DAILY`, `DAY`, `WEEK`, `MONTH`, `YEAR`. `MONTH` et `YEAR` créent automatiquement un intervalle personnalisé.
+- **`Interval`** pour un rythme précis (`seconds`, `minutes`, `hours`, `days`, `weeks`, `display`). Les chaînes WordPress (`'daily'`) et les tableaux restent acceptés (syntaxe historique).
+- **Nom du hook** : généré en snake_case depuis la classe et la méthode (`DatabaseMaintenance::cleanupOldRecords` donne `database_maintenance_cleanup_old_records`), ou imposé avec `hook:`. `args:` passe des arguments à la méthode.
+- Pour un événement qui dépend d'une condition, l'API fluide `Schedule::event('reports_compile')->daily()->at('02:00')->call(...)` ou `Schedule::once(...)`. Elle se teste avec `Schedule::fake()`.
+
+### Qui exécute les événements ?
+
+Le driver est choisi dans `config/schedule.php` ou avec `POLLORA_SCHEDULE_DRIVER`, et il concerne **tous** les événements, y compris les `wp_schedule_event()` de WordPress et des plugins.
+
+| Driver | Exécuté par | Nécessite |
+|---|---|---|
+| `wp-cron` (défaut) | WP-Cron, appelé par une cron système | Rien de plus |
+| `action-scheduler` | Le runner d'Action Scheduler, lui-même lancé par WP-Cron | Un plugin qui l'embarque |
+| `laravel` | Un worker de file (un job différé par événement) | Une connexion qui accepte les délais, et `php artisan queue:work` |
+
+Comme pour l'asynchrone, `DISABLE_WP_CRON` fait que, **sans cron système** (driver `wp-cron`) ou **sans worker** (driver `laravel`), aucun événement ne se déclenche. Avec `laravel`, il n'y a ni `schedule:run` ni table propre à Pollora : le worker est tout ce qui fait tourner les événements, et `pollora:doctor` signale ceux qui ont plus de dix minutes de retard.
+
+Changer de driver n'envoie que les **nouveaux** événements vers le nouveau driver. Les existants restent où ils sont jusqu'à `php artisan pollora:schedule:migrate` (avec `--dry-run` pour voir). `php artisan pollora:schedule:list` liste les événements.
+
+<Aside type="caution" title="Piège : l'ancienne option est supprimée">
+L'option `wordpress.use_laravel_scheduler` et son pont ont été retirés, sans période de dépréciation : la définir ne fait plus rien. Pour garder les événements sur la file de Laravel, utilisez `POLLORA_SCHEDULE_DRIVER=laravel` et un worker à la place de `schedule:run`.
+</Aside>
+
+## Partie 3 · Les modules
+
+Pollora s'appuie sur [Laravel Modules](https://laravelmodules.com/) (nwidart). La règle de choix de la documentation :
+
+- Un **module** regroupe des fonctionnalités **propres à un projet**, difficiles à réutiliser ailleurs. Il profite pleinement de l'écosystème Laravel, avec ses propres routes, vues, configurations, migrations, modèles et tests, et peut être activé ou désactivé.
+- Un **plugin WordPress** est en général **générique et réutilisable** sur plusieurs projets.
+
+Tout ce qui existe dans `app/` (types de contenu, taxonomies, hooks…) fonctionne aussi dans un module.
+
+### Créer un module
+
+```bash
+php artisan pollora:make:module Portfolio
+```
+
+La commande récupère le gabarit `module-default`, le nomme, l'active, lance `composer dump-autoload` et construit les assets avec npm. Le module est volontairement minimal : **ni service provider, ni contrôleur, ni routes, ni configuration, ni seeder, ni tests** par défaut. Les classes à attributs placées dans `app/` sont découvertes. Chaque couche s'ajoute avec un drapeau :
+
+| Drapeau | Ajoute |
+|---|---|
+| `--provider` | Un service provider, listé dans `module.json` |
+| `--routes` | `routes/web.php` et son `RouteServiceProvider` (implique `--provider`) |
+| `--api` | `routes/api.php`, sous `/api` (implique `--routes`) |
+| `--config` | `config/config.php`, lu via `config('portfolio.*')` (implique `--provider`) |
+| `--database` | migrations, seeders et factories |
+| `--tests` | `tests/Feature`, `tests/Unit` et un test Pest |
+| `--full` | toutes les couches ci-dessus |
+| `--no-assets` | pas de `package.json` ni de Vite, pour un module PHP seul |
+
+Les générateurs de Pollora acceptent `--module` et écrivent dans le module, sous le namespace que son `composer.json` associe à `app/` :
+
+```bash
+php artisan pollora:make:post-type Project --module=Portfolio
+php artisan pollora:make:block project-card --module=Portfolio
+```
+
+### La découverte dans un module
+
+Pollora découvre, **pour chaque module activé**, les classes de son dossier `app/` sans aucun enregistrement : types de contenu (`#[PostType]`), taxonomies (`#[Taxonomy]`), hooks (`#[Action]`, `#[Filter]`), routes REST (`#[WpRestRoute]`), tâches planifiées (`#[Schedule]`) et blocs Gutenberg (dossiers de `resources/views/blocks`). Un `#[Async]` à côté d'un `#[Action]` suit la même mécanique. Après l'ajout d'une telle classe avec le cache de découverte actif, lancez `php artisan discovery:clear`.
+
+### Activer, désactiver, installer
+
+- `php artisan module:enable Portfolio` / `module:disable Portfolio` : le changement s'applique à la requête suivante. L'écran Plugins › Modules propose les mêmes interrupteurs.
+- L'état est conservé par un **connecteur** : `json` (défaut, fichier `modules_statuses.json`, n'est conservé d'un déploiement que s'il est versionné), `database` (option WordPress, survit aux déploiements) ou `config` (livré avec le code, pour les déploiements immuables).
+- Un module publié comme paquet Composer s'installe avec `composer require` directement dans `Modules/`. Il n'est pas activé pour autant : `module:enable`.
+- Les `require` du `composer.json` d'un module sont fusionnés dans le projet, pas ses `require-dev`.
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Pas de worker">
+Un projet neuf déclare `#[Action('save_post_event')]` + `#[Async]`. `HOOKS_ASYNC_CONNECTION` n'est pas défini. Que se passe-t-il ?
+
+- [ ] L'action attend un worker de file que personne n'a lancé
+  > Avec `auto`, la file Laravel n'est choisie que si `HOOKS_ASYNC_CONNECTION` désigne une connexion.
+- [x] Le driver `auto` passe à Action Scheduler s'il est disponible, sinon à WP-Cron
+- [ ] L'action s'exécute toujours de façon synchrone
+
+Et comme `DISABLE_WP_CRON` est défini, WP-Cron lui-même n'est lancé que par une cron système.
+
+</Quiz>
+
+<Quiz title="Ce qui ne peut pas voyager">
+Quels arguments d'un hook asynchrone peuvent être mis en file ?
+
+- [x] Un `WP_Post` (rechargé par son ID à l'exécution)
+- [x] Un modèle Eloquent
+- [x] Une enum
+- [ ] Une instance d'un client HTTP
+  > Tout autre objet est refusé : exception en debug, exécution synchrone et journal en production.
+
+Les objets référencés sont rechargés à l'exécution ; passez un identifiant plutôt qu'un service.
+
+</Quiz>
+
+<Quiz title="Au moins une fois">
+Pourquoi un handler asynchrone doit-il être « rejouable » ?
+
+- [ ] Parce que les handlers asynchrones s'exécutent toujours deux fois
+  > Ce n'est pas systématique : c'est une possibilité.
+- [x] Parce qu'une nouvelle tentative après échec, ou un hook déclenché deux fois, peut l'exécuter plusieurs fois
+- [ ] Parce que l'ordre d'exécution est garanti mais pas le nombre
+
+La garantie est « au moins une fois », sans ordre garanti : vérifiez avant d'envoyer, faites un upsert.
+
+</Quiz>
+
+<Quiz title="Planifier sans rien exécuter">
+Vous déclarez `#[Schedule(Every::DAY)]` avec le driver `wp-cron` par défaut, et aucune cron système n'est configurée. Que se passe-t-il ?
+
+- [ ] WordPress lance les événements dus à chaque visite
+  > Pollora définit `DISABLE_WP_CRON` : les chargements de page ne lancent pas WP-Cron.
+- [x] Rien ne s'exécute tant qu'une cron système n'appelle pas WP-Cron
+- [ ] Laravel exécute la tâche avec `schedule:run`
+  > `schedule:run` n'intervient pas : avec le driver `laravel`, c'est un worker de file qui exécute les événements.
+
+Avec le driver `laravel`, la condition équivalente est `php artisan queue:work`. Et `wordpress.use_laravel_scheduler` n'existe plus.
+
+</Quiz>
+
+<Quiz title="Module ou plugin ?">
+Un site a besoin d'un portfolio (type de contenu, bloc et tâche planifiée) très lié aux règles métier du client. Quel choix correspond à la documentation ?
+
+- [x] Un module : ces fonctionnalités sont propres au projet, et la découverte les enregistre sans service provider
+- [ ] Un plugin WordPress, parce que les types de contenu doivent toujours y vivre
+  > Les types de contenu, hooks et tâches planifiées fonctionnent dans un module comme dans `app/`.
+- [ ] Un module avec `--full`, sans quoi la découverte ne fonctionne pas
+  > Le module minimal suffit : les couches Laravel (routes, config, base de données…) s'ajoutent à la demande.
+
+Un plugin est plutôt générique et réutilisable entre projets.
+
+</Quiz>
+
+<QuizResults />
+
+## Pour aller plus loin
+
+- [Actions asynchrones](https://pollora.dev/hooks/async-actions/)
+- [Planification](https://pollora.dev/advanced/scheduling/)
+- [Modules](https://pollora.dev/advanced/modules/)
+- [Actions et filtres](https://pollora.dev/hooks/actions-filters/)
+- [Laravel Modules (nwidart)](https://laravelmodules.com/docs)
