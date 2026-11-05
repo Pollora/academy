@@ -1,8 +1,8 @@
 ---
-title: "Module 10 · REST, AJAX et authentification"
+title: "Module 6 · REST, AJAX et authentification"
 description: Exposer du comportement par une route REST, un handler AJAX ou une route /api, et savoir qui a le droit de l'appeler.
 sidebar:
-  label: 10 · REST, AJAX, authentification
+  label: 6 · REST, AJAX, authentification
 ---
 
 import { Quiz, QuizResults } from 'starlight-quiz/components';
@@ -162,7 +162,7 @@ use Theme\MyTheme\Http\Controllers\Api\ProductSearchController;
 Route::get('/products/search', ProductSearchController::class);   // GET /api/products/search
 ```
 
-Elles bénéficient du **mode léger** (module 1, performances au module 6) : WordPress se charge **sans les plugins** et le thème reste chargé. La clé `wordpress.api_plugins` de `config/wordpress.php` règle cela : `[]` (aucun, le défaut), une liste (`['woocommerce']`), des motifs (`['woocommerce*']`), ou `['*']` / `null` pour tout charger. Sans plugins, un handler s'appuie plutôt sur Eloquent ou la facade `DB` que sur des fonctions WordPress ou de plugin (`get_permalink()`, `wc_get_product()`).
+Elles bénéficient du **mode léger** (module 1, performances au module 8) : WordPress se charge **sans les plugins** et le thème reste chargé. La clé `wordpress.api_plugins` de `config/wordpress.php` règle cela : `[]` (aucun, le défaut), une liste (`['woocommerce']`), des motifs (`['woocommerce*']`), ou `['*']` / `null` pour tout charger. Sans plugins, un handler s'appuie plutôt sur Eloquent ou la facade `DB` que sur des fonctions WordPress ou de plugin (`get_permalink()`, `wc_get_product()`).
 
 ### Sessions et CSRF sur les routes WordPress
 

@@ -5,6 +5,27 @@ import starlightQuiz from 'starlight-quiz';
 
 export default defineConfig({
 	site: 'https://academy.pollora.dev',
+	// Module numbers changed when the course was put in teaching order: keep the first published URLs working
+	redirects: {
+		'/fr/modules/03-blocks': '/fr/modules/04-blocks/',
+		'/fr/modules/04-themes': '/fr/modules/05-themes/',
+		'/fr/modules/05-async-schedule-modules': '/fr/modules/07-async-schedule-modules/',
+		'/fr/modules/06-media-woocommerce-performance': '/fr/modules/08-media-woocommerce-performance/',
+		'/fr/modules/07-nectar': '/fr/modules/09-nectar/',
+		'/fr/modules/08-ai-upgrade': '/fr/modules/11-ai-upgrade/',
+		'/fr/modules/09-hooks-events': '/fr/modules/03-hooks-events/',
+		'/fr/modules/10-rest-ajax-auth': '/fr/modules/06-rest-ajax-auth/',
+		'/fr/modules/11-abilities': '/fr/modules/10-abilities/',
+		'/en/modules/03-blocks': '/en/modules/04-blocks/',
+		'/en/modules/04-themes': '/en/modules/05-themes/',
+		'/en/modules/05-async-schedule-modules': '/en/modules/07-async-schedule-modules/',
+		'/en/modules/06-media-woocommerce-performance': '/en/modules/08-media-woocommerce-performance/',
+		'/en/modules/07-nectar': '/en/modules/09-nectar/',
+		'/en/modules/08-ai-upgrade': '/en/modules/11-ai-upgrade/',
+		'/en/modules/09-hooks-events': '/en/modules/03-hooks-events/',
+		'/en/modules/10-rest-ajax-auth': '/en/modules/06-rest-ajax-auth/',
+		'/en/modules/11-abilities': '/en/modules/10-abilities/',
+	},
 	integrations: [
 		starlight({
 			title: 'Pollora Academy',

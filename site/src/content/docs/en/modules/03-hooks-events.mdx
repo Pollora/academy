@@ -1,8 +1,8 @@
 ---
-title: "Module 9 · Hooks and events"
+title: "Module 3 · Hooks and events"
 description: Replace add_action() and add_filter() with PHP attributes, inject services into hooks, and react to WordPress events with Laravel listeners.
 sidebar:
-  label: 9 · Hooks and events
+  label: 3 · Hooks and events
 ---
 
 import { Quiz, QuizResults } from 'starlight-quiz/components';
@@ -177,7 +177,7 @@ These are standard Laravel listeners: for heavy work (image optimisation, notifi
 - You must **change a WordPress value or output**: a hook (`#[Filter]`; a filter must return a value).
 - You **react to something that already happened**, especially if it is slow: a listener, possibly queued.
 - WordPress events fire often: only register the listeners you need.
-- To run **an action** after the request, `#[Async]` next to `#[Action]` also exists: see [module 5](/en/modules/05-async-schedule-modules/).
+- To run **an action** after the request, `#[Async]` next to `#[Action]` also exists: see [module 7](/en/modules/07-async-schedule-modules/).
 
 ## Check what you remember
 
@@ -242,7 +242,7 @@ After a post is published you must notify an external service, which takes sever
 - [ ] A `PostPublished` listener without a queue, to keep it simple
   > It would work, but heavy work slows down the admin: queue it.
 
-An `#[Action]` with `#[Async]` (module 5) is the other way to take the work out of the request.
+An `#[Action]` with `#[Async]` (module 7) is the other way to take the work out of the request.
 
 </Quiz>
 
@@ -267,5 +267,5 @@ Once `lab/bin/lab setup` is done (see [module 1](/en/modules/01-mental-model/)),
 - [Actions & Filters](https://pollora.dev/hooks/actions-filters/): attributes, facades, injection, removal
 - [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/): the step-by-step guide
 - [Events & Listeners](https://pollora.dev/hooks/events-listeners/) and the [events reference](https://pollora.dev/hooks/wordpress-events-reference/)
-- [Asynchronous Actions](https://pollora.dev/hooks/async-actions/): `#[Async]`, the topic of module 5
+- [Asynchronous Actions](https://pollora.dev/hooks/async-actions/): `#[Async]`, the topic of module 7
 - [Auto-discovery](https://pollora.dev/core-concepts/auto-discovery/): exclusions and cache
