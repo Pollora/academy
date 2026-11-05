@@ -30,7 +30,7 @@ export default defineConfig({
 				{
 					label: 'Parcours',
 					translations: { en: 'Path' },
-					autogenerate: { directory: 'modules' },
+					items: [{ autogenerate: { directory: 'modules' } }],
 				},
 			],
 		}),
