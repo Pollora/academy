@@ -1,0 +1,205 @@
+---
+title: "Module 2 · Contenu typé : post types, meta et rôles"
+description: Déclarer un post type, ses meta typées et les rôles qui le gèrent, en PHP, sans register_post_type() ni add_role().
+sidebar:
+  label: 2 · Contenu typé
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Post Types](https://pollora.dev/content/post-types/), [Typed Meta](https://pollora.dev/content/typed-meta/) et [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/).
+</Aside>
+
+**Durée : 60 min · Prérequis : le module 1, et savoir ce que sont une meta et un rôle WordPress.**
+
+À la fin de ce module, vous déclarez un contenu, ses champs et ses droits **une seule fois**, dans des classes PHP, et Pollora en déduit l'enregistrement WordPress.
+
+<Aside type="caution" title="API expérimentales">
+`#[Meta]` et les rôles déclarés (`#[Role]`, `#[ModifyRole]`) sont marqués expérimentaux dans la documentation : leur API peut encore changer avant d'être déclarée stable. Vérifier les droits avec `can()` est stable.
+</Aside>
+
+## 1. Un post type, une classe
+
+```php title="app/Cms/PostTypes/Event.php"
+use Pollora\Attributes\PostType;
+use Pollora\Attributes\PostType\HasArchive;
+use Pollora\Attributes\PostType\ShowInRest;
+use Pollora\Attributes\PostType\Supports;
+
+#[PostType]
+#[HasArchive]
+#[ShowInRest]
+#[Supports(['title', 'editor'])]
+class Event {}
+```
+
+Le slug, le nom au singulier et au pluriel viennent du nom de la classe : `Event` donne `event`, `BookReview` donne `book-review`. La classe est trouvée par l'auto-découverte : aucun appel à `register_post_type()`.
+
+En développement, après avoir ajouté une classe : `php artisan discovery:clear`. Pour en générer une : `php artisan pollora:make:post-type Event`.
+
+## 2. Des meta typées
+
+Une meta WordPress est une chaîne : sa clé est répétée partout et chaque lecture refait le même cast. Avec Pollora, la meta est une **propriété PHP typée** de la même classe.
+
+```php
+use Pollora\Attributes\Meta;
+
+#[PostType]
+#[ShowInRest]
+class Event
+{
+    #[Meta(showInRest: true, label: 'Capacité', rules: ['min:0', 'max:5000'])]
+    public int $capacity = 0;                    // clé : capacity
+
+    #[Meta(showInRest: true)]
+    public ?CarbonImmutable $startsAt = null;    // clé : starts_at
+}
+```
+
+- Le **type** de la propriété donne le type de la meta, sa **valeur initiale** donne le défaut (ce que lit une meta absente), son **nom** donne la clé en snake_case.
+- Pollora déduit `register_meta()`, la sanitisation et le schéma REST.
+- Une propriété sans défaut ni type nullable est refusée à la découverte.
+
+```php
+use Pollora\Support\Facades\Meta;
+
+$event = Meta::of(Event::class, $postId);
+
+$event->capacity;          // int
+$event->capacity = 250;
+$event->save();            // écrit via update_metadata()
+```
+
+WordPress garde la main sur le stockage : `get_post_meta($id, 'capacity', true)` renvoie toujours la chaîne `'250'`. Mais une écriture par `Meta::of()` est **vérifiée tout de suite** : `$event->capacity = 6000` lève une `MetaValidationException` avant d'écrire quoi que ce soit.
+
+<Aside type="caution" title="Piège : les fonctions WordPress ne refusent rien">
+`update_post_meta()` ne peut pas refuser une valeur : il applique seulement la sanitisation du type. Les `rules` sont contrôlées à l'écriture depuis PHP (`Meta::of()`, modèles) et depuis REST, pas par les fonctions de WordPress.
+</Aside>
+
+Deux commandes pour vérifier : `php artisan pollora:meta:list` (toutes les meta, par classe) et `php artisan pollora:meta:audit` (valeurs stockées illisibles pour leur type).
+
+## 3. Des rôles déclarés dans le code
+
+```php title="app/Cms/Roles/EventManager.php"
+use Pollora\Attributes\Role;
+use Pollora\Attributes\Role\Grants;
+use Pollora\Attributes\Role\Without;
+
+#[Role('event_manager', label: 'Event manager', inherits: 'author')]
+#[Grants('moderate_comments')]
+#[Without('publish_posts')]
+final class EventManager {}
+```
+
+Ce rôle part des capacités d'un auteur, peut modérer les commentaires et ne peut pas publier d'articles.
+
+**Le code est la seule source de vérité.** Pollora n'écrit pas ces rôles en base : il les injecte en mémoire à chaque requête. Modifiez la classe et déployez, le rôle suit partout, sans migration. Revenez en arrière avec Git, les anciens droits reviennent.
+
+Les garde-fous refusent, à la découverte, ce qui donnerait de mauvais droits :
+
+- une capacité sensible (`manage_options`, `edit_users`…) sans `allowSensitive: true` ;
+- redéclarer un rôle du noyau (`editor`, `author`…) avec `#[Role]` : on utilise `#[ModifyRole]` ;
+- une capacité à la fois accordée et retirée par la même classe.
+
+`#[Without]` **retire** une capacité, il ne la met jamais à `false` : WordPress fusionne les rôles d'un utilisateur et un refus explicite dépendrait de leur ordre.
+
+Pour voir le résultat : `php artisan pollora:roles:list` et `php artisan pollora:roles:show event_manager`.
+
+<Aside type="tip" title="Vérifiez une capacité, pas un rôle">
+`@can('export_attendees')` reste juste le jour où un second rôle reçoit cette capacité. `@role('event_manager')` devient faux. Gardez `@role` pour ce qui parle du rôle lui-même.
+</Aside>
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Le slug d'un post type">
+Quel slug Pollora génère-t-il pour `#[PostType] class BookReview {}` ?
+
+- [ ] `bookreview`
+- [x] `book-review`
+- [ ] `book_review`
+  > WordPress accepte les underscores, mais Pollora génère le slug en kebab-case à partir du nom de la classe.
+
+Le slug, le singulier et le pluriel sont déduits du nom de la classe.
+
+</Quiz>
+
+<Quiz title="La clé d'une meta">
+Sous quelle clé est stockée `public ?CarbonImmutable $startsAt = null;` marquée `#[Meta]` ?
+
+- [ ] `startsAt`
+- [x] `starts_at`
+- [ ] `_starts_at`
+  > Une clé qui commence par `_` est protégée : WordPress la cache. Elle exige une `capability` explicite.
+
+Le nom de la propriété donne la clé en snake_case, sauf si le paramètre `key` en choisit une autre.
+
+</Quiz>
+
+<Quiz title="Écrire une valeur invalide">
+Une meta `capacity` a `rules: ['max:5000']`. Que se passe-t-il pour `$event->capacity = 6000;` puis pour `update_post_meta($id, 'capacity', 6000);` ?
+
+- [x] La première lève une `MetaValidationException`, la seconde écrit la valeur
+- [ ] Les deux lèvent une exception
+  > Les fonctions de WordPress ne peuvent pas refuser une valeur : elles appliquent seulement la sanitisation du type.
+- [ ] Les deux écrivent la valeur, l'erreur n'apparaît qu'à la lecture
+
+Les `rules` valent pour les écritures depuis PHP (`Meta::of()`, modèles) et REST.
+
+</Quiz>
+
+<Quiz title="Où vit un rôle déclaré ?">
+Vous supprimez la classe `EventManager` et vous déployez. Que devient le rôle `event_manager` ?
+
+- [ ] Il reste en base jusqu'à une suppression manuelle
+- [x] Il disparaît : le code est la seule source de vérité
+  > Pollora injecte les rôles en mémoire à chaque requête. Les utilisateurs qui l'avaient gardent le slug mais n'en tirent aucune capacité.
+- [ ] Il devient un rôle `subscriber`
+
+Pollora annule aussi ce qu'un plugin aurait réécrit en base pour un rôle retiré du code.
+
+</Quiz>
+
+<Quiz title="Des droits sensibles">
+Quelles déclarations sont refusées à la découverte ?
+
+- [x] `#[Grants('manage_options')]` sans `allowSensitive: true`
+- [x] `#[Role('editor', …)]` pour redéclarer un rôle du noyau
+- [ ] `#[Without('publish_posts')]` sur un rôle qui hérite d'`author`
+  > C'est l'usage normal de `#[Without]` : retirer une capacité héritée.
+- [ ] `#[Role('event_manager', inherits: 'author')]`
+
+Un rôle du noyau se modifie avec `#[ModifyRole]`.
+
+</Quiz>
+
+<QuizResults />
+
+## Exercices
+
+<Aside type="tip" title="Dans le lab">
+Une fois `lab/bin/lab setup` fait (voir le [module 1](/fr/modules/01-mental-model/)), travaillez dans `lab/academy-lab/`.
+</Aside>
+
+### Exercice 02 · La capacité d'un événement
+
+`lab/bin/lab reset 02`, puis modifiez `app/Cms/PostTypes/Event.php`.
+
+**Objectif.** Déclarer `capacity` comme meta typée : un entier, `0` par défaut, exposée dans l'API REST, jamais supérieure à 5000 (et pas négative).
+
+`lab/bin/lab check 02` vérifie que la meta est enregistrée en `integer` avec `show_in_rest`, qu'elle se lit et s'écrit avec son type PHP, et qu'une valeur de 6000 est refusée.
+
+### Exercice 03 · Un rôle « event manager »
+
+`lab/bin/lab reset 03`, puis modifiez `app/Cms/Roles/EventManager.php`.
+
+**Objectif.** Faire de cette classe le rôle `event_manager`, libellé « Event manager », qui part des capacités d'un auteur, peut modérer les commentaires et ne peut pas publier d'articles.
+
+`lab/bin/lab check 03` vérifie l'existence et le libellé du rôle, les capacités héritées, et la présence ou l'absence des deux capacités.
+
+## Pour aller plus loin
+
+- [Post Types](https://pollora.dev/content/post-types/) et sa [référence des attributs](https://pollora.dev/content/post-types-reference/)
+- [Typed Meta](https://pollora.dev/content/typed-meta/) : tableaux, objets, validation, REST
+- [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/) : types de contenu aux droits propres, `#[ModifyRole]`, migration d'un rôle existant

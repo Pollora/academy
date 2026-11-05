@@ -30,7 +30,7 @@ export default defineConfig({
 				{
 					label: 'Parcours',
 					translations: { en: 'Path' },
-					items: [{ slug: 'modules/01-mental-model' }],
+					items: [{ autogenerate: { directory: 'modules' } }],
 				},
 			],
 		}),
