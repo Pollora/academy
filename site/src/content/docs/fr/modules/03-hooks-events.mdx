@@ -1,8 +1,8 @@
 ---
-title: "Module 9 · Hooks et événements"
+title: "Module 3 · Hooks et événements"
 description: Remplacer add_action() et add_filter() par des attributs PHP, injecter des services dans les hooks, et réagir aux événements WordPress avec des listeners Laravel.
 sidebar:
-  label: 9 · Hooks et événements
+  label: 3 · Hooks et événements
 ---
 
 import { Quiz, QuizResults } from 'starlight-quiz/components';
@@ -177,7 +177,7 @@ Les listeners sont des listeners Laravel standard : pour le travail lourd (optim
 - Vous devez **changer une donnée ou une sortie** de WordPress : un hook (`#[Filter]` ; un filtre doit renvoyer une valeur).
 - Vous **réagissez à un fait accompli**, surtout si c'est lent : un listener, éventuellement en file.
 - Les événements WordPress se déclenchent souvent : n'enregistrez que les listeners dont vous avez besoin.
-- Pour exécuter **une action** après la requête, il existe aussi `#[Async]` à côté de `#[Action]` : voir le [module 5](/fr/modules/05-async-schedule-modules/).
+- Pour exécuter **une action** après la requête, il existe aussi `#[Async]` à côté de `#[Action]` : voir le [module 7](/fr/modules/07-async-schedule-modules/).
 
 ## Vérifiez ce que vous avez retenu
 
@@ -242,7 +242,7 @@ Après la publication d'un article, vous devez prévenir un service externe, ce 
 - [ ] Un listener de `PostPublished` sans file d'attente, pour que ce soit simple
   > Il fonctionnerait, mais le travail lourd ralentit l'administration : on le met en file.
 
-Un `#[Action]` avec `#[Async]` (module 5) est l'autre voie pour sortir le travail de la requête.
+Un `#[Action]` avec `#[Async]` (module 7) est l'autre voie pour sortir le travail de la requête.
 
 </Quiz>
 
@@ -267,5 +267,5 @@ Une fois `lab/bin/lab setup` fait (voir le [module 1](/fr/modules/01-mental-mode
 - [Actions & Filters](https://pollora.dev/hooks/actions-filters/) : attributs, facades, injection, suppression
 - [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/) : le guide pas à pas
 - [Events & Listeners](https://pollora.dev/hooks/events-listeners/) et la [référence des événements](https://pollora.dev/hooks/wordpress-events-reference/)
-- [Actions asynchrones](https://pollora.dev/hooks/async-actions/) : `#[Async]`, le sujet du module 5
+- [Actions asynchrones](https://pollora.dev/hooks/async-actions/) : `#[Async]`, le sujet du module 7
 - [Auto-découverte](https://pollora.dev/core-concepts/auto-discovery/) : exclusions et cache

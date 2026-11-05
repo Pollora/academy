@@ -1,8 +1,8 @@
 ---
-title: "Module 10 · REST, AJAX and authentication"
+title: "Module 6 · REST, AJAX and authentication"
 description: Expose behaviour through a REST route, an AJAX handler or an /api route, and know who is allowed to call it.
 sidebar:
-  label: 10 · REST, AJAX, authentication
+  label: 6 · REST, AJAX, authentication
 ---
 
 import { Quiz, QuizResults } from 'starlight-quiz/components';
@@ -162,7 +162,7 @@ use Theme\MyTheme\Http\Controllers\Api\ProductSearchController;
 Route::get('/products/search', ProductSearchController::class);   // GET /api/products/search
 ```
 
-They benefit from **lightweight mode** (module 1, performance in module 6): WordPress loads **without plugins** and the theme stays loaded. The `wordpress.api_plugins` key in `config/wordpress.php` controls this: `[]` (none, the default), a list (`['woocommerce']`), patterns (`['woocommerce*']`), or `['*']` / `null` to load everything. Without plugins, a handler should rely on Eloquent or the `DB` facade rather than WordPress or plugin functions (`get_permalink()`, `wc_get_product()`).
+They benefit from **lightweight mode** (module 1, performance in module 8): WordPress loads **without plugins** and the theme stays loaded. The `wordpress.api_plugins` key in `config/wordpress.php` controls this: `[]` (none, the default), a list (`['woocommerce']`), patterns (`['woocommerce*']`), or `['*']` / `null` to load everything. Without plugins, a handler should rely on Eloquent or the `DB` facade rather than WordPress or plugin functions (`get_permalink()`, `wc_get_product()`).
 
 ### Sessions and CSRF on WordPress routes
 
