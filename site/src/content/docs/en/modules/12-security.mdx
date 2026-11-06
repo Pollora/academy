@@ -1,0 +1,408 @@
+---
+title: "Module 12 · Security"
+description: Escape output, protect REST routes and AJAX handlers, hand out rights sparingly, expose data and abilities with care, and review what an AI agent wrote.
+sidebar:
+  label: 12 · Security
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. Facts come from the official documentation: [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/#rendering-with-blade), [REST API](https://pollora.dev/advanced/rest-api/), [AJAX](https://pollora.dev/advanced/ajax/), [Authentication](https://pollora.dev/advanced/authentication/), [Middleware](https://pollora.dev/routing/middleware/), [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/), [Typed Meta](https://pollora.dev/content/typed-meta/), [Block Bindings](https://pollora.dev/blocks/block-bindings/), [Abilities](https://pollora.dev/advanced/abilities/) and [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/). When in doubt, it is the reference. Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)). On a server with neither DDEV nor the Pollora CLI, type the `php artisan pollora:<name>` form.
+</Aside>
+
+**Duration: 60 min · Prerequisites: modules 1, 2 and 6 (content types and capabilities, REST routes, AJAX).**
+
+By the end of this module you can spot in Pollora code where data leaves unescaped, where an endpoint is open and nobody meant it to be, where too many rights are handed out, and you know how to review what an AI agent wrote with those questions in mind.
+
+The "find the bugs" snippets in this module are **exercises**: they contain deliberate defects. They are never code to copy.
+
+## 1. Escaping output in Blade
+
+In a Blade view, `{{ }}` escapes the value; `{!! !!}` writes it as is. For a block rendered by `render.blade.php`, the documentation is precise: use `{!! !!}` only for `get_block_wrapper_attributes()` and `$content`, which WordPress already escaped. Everything else (block attributes, text typed in the editor) goes through `{{ }}`.
+
+```blade
+<section {!! get_block_wrapper_attributes(['class' => 'py-16']) !!}>
+    <h2>{{ $attributes['heading'] ?? '' }}</h2>
+    <a href="{{ esc_url_raw($attributes['buttonUrl'] ?? '#') }}">Go</a>
+    {!! $content !!}
+</section>
+```
+
+For a URL, filter the protocol with `esc_url_raw()` and let `{{ }}` escape: `esc_url()` already HTML-encodes, so inside `{{ }}` an `&` would come out as `&amp;#038;`.
+
+<SpotTheBug
+  id="m12-blade-escaping"
+  title="A block rendered in Blade"
+  language="blade"
+  code={`<section {!! get_block_wrapper_attributes(['class' => 'py-16']) !!}>
+    <h2>{!! $attributes['heading'] ?? '' !!}</h2>
+    <p>{{ $attributes['intro'] ?? '' }}</p>
+    <a href="{{ $attributes['buttonUrl'] ?? '#' }}">
+        {{ $attributes['buttonText'] ?? __('Learn more', 'my-theme') }}
+    </a>
+    {!! $content !!}
+</section>`}
+  bugs={[
+    { line: 2, why: "The heading is typed by an editor: it is not one of the only two raw outputs allowed (get_block_wrapper_attributes() and $content). It needs {{ }}." },
+    { line: 4, why: "The URL is printed without filtering the protocol. The documentation asks for esc_url_raw() inside {{ }}." },
+  ]}
+  fix={{
+    question: "How should the href value be written?",
+    options: [
+      "href=\"{!! $attributes['buttonUrl'] ?? '#' !!}\"",
+      "href=\"{{ esc_url($attributes['buttonUrl'] ?? '#') }}\"",
+      "href=\"{{ esc_url_raw($attributes['buttonUrl'] ?? '#') }}\"",
+    ],
+    answer: 2,
+    why: "esc_url_raw() filters the protocol and {{ }} escapes. esc_url() inside {{ }} encodes twice: an & would come out as &amp;#038;.",
+  }}
+/>
+
+<Aside type="tip" title="With Claude Code">
+When Claude Code writes a Blade template, search the diff for `{!!`: each occurrence must be `get_block_wrapper_attributes()` or `$content`. If not, ask it why.
+</Aside>
+
+## 2. REST and AJAX: who may call?
+
+### REST: a permission, always stated
+
+A `#[WpRestRoute]` route sets its permission on the class or on the method, and **the method's permission replaces the class's**. The classes provided: `Everyone` (anyone, logged in or not), `IsLoggedIn`, `IsAdmin`, and `new Can('capability')` for a WordPress capability (an instance, because `Can` takes arguments; `parameter: 'id'` passes a request parameter for a meta capability such as `edit_post`).
+
+Since `pollora/wp-rest` 2.0 (framework 13.39.3), a route that names **no** permission is refused: `rest_forbidden`, status 401 for a visitor, 403 for a logged-in user. A route that is public on purpose says so with `Everyone::class`. Before 2.0 such a route stayed public: an older project may still behave that way, and an agent may "fix" a refused route by pasting `Everyone` everywhere.
+
+### AJAX: logged-in by default
+
+`#[Ajax]` and the `Ajax` facade serve logged-in users only by default (`AjaxAccess::LOGGED`, hook `wp_ajax_{action}`). `AjaxAccess::ALL` (or `forAllUsers()`) adds `wp_ajax_nopriv_{action}`, and `AjaxAccess::GUEST` serves guests only: exposing `wp_ajax_nopriv_*` lets any unauthenticated visitor call the endpoint. The documentation makes it a conscious decision.
+
+### The nonce in the example
+
+The documentation's example sends `_wpnonce: myApp.nonce` with the request, and the script receives that nonce through `localize()`, created on the PHP side with `wp_create_nonce('wp_rest')`. That is all the AJAX page says: **it does not say who verifies this nonce on the server**. So do not rely on it as a handler's only protection: it is the access restriction (`AjaxAccess`, REST permission, capability) that protects.
+
+<Aside type="caution" title="Sessions off: no CSRF check on Route::wp()">
+With `'sessions' => false` in `config/wordpress.php`, `Route::wp()` routes skip `StartSession` and the CSRF middleware: a `POST` received by such a route is no longer checked. A form that needs Laravel validation or CSRF is declared with `Route::post()`, which keeps the full `web` group (Middleware page).
+</Aside>
+
+<SpotTheBug
+  id="m12-rest-ajax-access"
+  title="A REST route and an AJAX handler"
+  language="php"
+  code={`#[WpRestRoute('app/v1', 'events/(?P<id>\\\\d+)', permissionCallback: Everyone::class)]
+class EventAPI
+{
+    #[Method('GET')]
+    public function show(int $id): array {}
+
+    #[Method('DELETE')]
+    public function destroy(int $id): array {}
+}
+
+class OrderHandler
+{
+    #[Ajax('my_orders', access: AjaxAccess::ALL)]
+    public function myOrders(): void
+    {
+        wp_send_json_success($this->orders->forCustomer(get_current_user_id()));
+    }
+}`}
+  bugs={[
+    { line: 1, why: "Everyone on the class applies to every method that has no permission of its own: the deletion (DELETE) is public." },
+    { line: 13, why: "AjaxAccess::ALL opens wp_ajax_nopriv_my_orders: a logged-out visitor can call a handler meant for a customer. The default (logged-in only) was enough." },
+  ]}
+  fix={{
+    question: "How do you protect the deletion without touching the public read?",
+    options: [
+      "Set permissionCallback: IsAdmin::class on the destroy method (it replaces the class's)",
+      "Remove Everyone from the class",
+      "Keep the code: the URL holds an identifier, nobody will guess it",
+    ],
+    answer: 0,
+    why: "The method's permission replaces the class's. Removing Everyone would make the GET private too (a route with no permission is refused).",
+  }}
+/>
+
+## 3. Roles and capabilities: do not hand out more than needed
+
+- **Check a capability, not a role.** `@can('export_attendees')`, `can:export_attendees` and `new Can(…)` stay right when a second role is given the capability; `@role('event_manager')` becomes wrong.
+- **Sensitive capabilities.** `manage_options`, `edit_users`, `create_users`, `delete_users`, `promote_users`, `unfiltered_html`, `unfiltered_upload`, `install_plugins`, `activate_plugins`, `edit_plugins`, `edit_themes`, `edit_files` and `update_core` can only be granted with `allowSensitive: true` on `#[Role]` or `#[ModifyRole]`. The flag **makes the choice visible in code review**; without it, discovery refuses the declaration (the error is logged with the class named, and the declaration is not applied).
+- **Core roles.** `administrator`, `editor`, `author`, `contributor` and `subscriber` cannot be redeclared with `#[Role]`: adjust them with `#[ModifyRole]`.
+- **`#[Without]` removes a capability; it never sets it to `false`.** A role only grants or removes.
+- **`assignRole()` and `removeRole()` do not check the rights of the code calling them**, like `WP_User::set_role()`: where a user can trigger them, check `promote_users` first.
+
+`pollora roles:list` and `pollora roles:show <role>` show the effective capabilities and where each comes from; `pollora doctor` flags users who carry a role removed from the code and capabilities given to users one by one, outside the roles.
+
+<SpotTheBug
+  id="m12-roles"
+  title="Two roles declared in code"
+  language="php"
+  code={`#[Role('editor', label: 'Editor', inherits: 'author')]
+final class EditorRole {}
+
+#[Role('event_manager', label: 'Event manager', inherits: 'author')]
+#[Grants('moderate_comments')]
+#[Without('publish_posts')]
+final class EventManager {}
+
+#[Role('shop_helper', label: 'Shop helper', inherits: 'author', allowSensitive: true)]
+#[Grants('manage_options')]
+final class ShopHelper {}`}
+  bugs={[
+    { line: 1, why: "editor is a core role: it cannot be redeclared with #[Role]. Discovery refuses it; use #[ModifyRole('editor')]." },
+    { line: [9, 10], why: "A shop assistant gets manage_options, a sensitive capability, and allowSensitive: true is here only to silence the refusal. The flag makes the choice visible in review: the review is what has to refuse it." },
+  ]}
+  fix={{
+    question: "You want to give moderate_comments to the core editor role. What do you declare?",
+    options: [
+      "#[Role('editor', …)] with #[Grants('moderate_comments')]",
+      "#[ModifyRole('editor')] with #[Grants('moderate_comments')]",
+      "#[Without('moderate_comments')] on a neighbouring role",
+    ],
+    answer: 1,
+    why: "A role the project does not own is adjusted with #[ModifyRole], without redefining it.",
+  }}
+/>
+
+## 4. Typed meta and Block Bindings: what becomes visible
+
+### Typed meta in REST
+
+A meta declared with `#[Meta]` is exposed in REST only if `showInRest: true` (false by default). `capability` sets the capability required to **write** the meta through REST and the editor (by default: the right to edit the post or term), and `rules` adds Laravel validation rules checked on writes from PHP and REST. A key starting with an underscore is protected: WordPress hides it from custom fields and REST, and exposing it requires an explicit `capability` (without one, the declaration is refused at discovery). Sanitization applies to every write, wherever it comes from.
+
+### Block Bindings: the visibility rules
+
+Anyone who can edit a post can bind any source to it, so each source only shows what may be public:
+
+- the **post or term must be visible** (nothing from an unpublished post without `read_post`, or one waiting for its password);
+- post and term meta: only `showInRest: true` and a key **without** a leading underscore;
+- user meta: `showInRest` is not enough, `pollora/author-meta` only reads a meta marked `#[Meta(public: true)]`;
+- `pollora/option` only reads the options listed in `config/block-bindings.php`, none by default;
+- **no source reads the logged-in visitor**: the value would leak through the page cache.
+
+A binding that cannot show anything raises no error, the block keeps its saved content: `pollora doctor` and **Tools › Site Health** read them (`pollora binding:list` shows what can be bound, `pollora meta:list` the meta).
+
+<SpotTheBug
+  id="m12-bindings"
+  title="An option and a binding source"
+  language="php"
+  code={`// config/block-bindings.php
+return [
+    'options' => ['blogdescription', 'admin_email', 'mailserver_pass'],
+];
+
+#[BlockBinding('acme/greeting', label: 'Greeting')]
+final class GreetingBinding
+{
+    #[BindingField(label: 'Welcome')]
+    public function welcome(BindingContext $context): string
+    {
+        return 'Hello '.wp_get_current_user()->display_name;
+    }
+}`}
+  bugs={[
+    { line: 3, why: "pollora/option reads any listed option, and anyone who can edit a post can bind that source: list only options that may be public (blogdescription, yes; mailserver_pass, no)." },
+    { line: 12, why: "A source does not read the logged-in visitor: the value would leak through the page cache, one visitor receiving another's name." },
+  ]}
+  fix={{
+    question: "Why does the documentation forbid a source from reading the logged-in visitor?",
+    options: [
+      "Because wp_get_current_user() is too slow",
+      "Because the value would leak through the page cache",
+      "Because WordPress refuses the source at discovery",
+    ],
+    answer: 1,
+    why: "That is the reason the Block Bindings page gives.",
+  }}
+/>
+
+## 5. Abilities: deny by default, per-object permission
+
+An ability with no `can()` (or no `authorize()`) **refuses everything**: this is deliberate, a forgotten check makes the ability useless, not public. The permission callback receives the same input as the body, which allows a per-object check (`edit_post` on the identifier concerned, rather than a blanket `edit_posts`). Return a `WP_Error` rather than `false` to explain the refusal.
+
+Each ability also declares its **behaviour** (`Reads` by default, `Creates`, `Updates`, `Deletes`), published as annotations that clients use to decide how careful to be: a read may run unattended, a delete should be confirmed. **These annotations are advisory**: WordPress does not enforce them, and the permission is what protects the site. Set a `maximum` on anything that sizes a query, and prefer `enum()` over a free string.
+
+<SpotTheBug
+  id="m12-abilities"
+  title="An ability that updates a post"
+  language="php"
+  code={`#[Ability(
+    name: 'acme/update-post-title',
+    description: 'Updates the title of an existing post.',
+    category: 'acme-content',
+)]
+final class UpdatePostTitle implements AbilityHandler
+{
+    public function schema(SchemaBuilder $schema): void
+    {
+        $schema->integer('id', 'Identifier of the post to update.', required: true);
+        $schema->string('title', 'The new title.', required: true);
+    }
+
+    public function authorize(Input $input): mixed
+    {
+        return true;
+    }
+
+    public function handle(Input $input): mixed
+    {
+        return ['id' => wp_update_post([
+            'ID' => $input->id('id'),
+            'post_title' => $input->string('title'),
+        ])];
+    }
+}`}
+  bugs={[
+    { line: [1, 2, 3, 4, 5], why: "No behaviour: the ability is annotated Reads (read-only) by default although it modifies a post. A client may run it without confirmation. It needs Behaviour::Updates." },
+    { line: 16, why: "authorize() always returns true: every caller is allowed. The permission is what protects the site." },
+  ]}
+  fix={{
+    question: "Which check goes in authorize()?",
+    options: [
+      "return true; : only registered clients call it",
+      "return current_user_can('edit_posts');",
+      "return current_user_can('edit_post', $input->id('id'));",
+    ],
+    answer: 2,
+    why: "The per-object check verifies the right on the post concerned, not a general right. This is the documentation's example.",
+  }}
+/>
+
+## 6. Reviewing what an agent wrote
+
+The documentation's facts: [Nectar](https://pollora.dev/nectar/overview/) only loads when `APP_ENV` is `local` or `development`, its MCP tools are all read-only, and you still review what the agent writes. The guide adds that the guidelines state a key rule: never call WordPress registration functions directly, use attributes and discovery. An agent that writes `register_post_type()` or a raw `add_action()` bypasses what Pollora checks for you.
+
+What follows is course advice, not a documented rule: never paste an API key, a token or a password into a conversation with an agent, or into a file it will read.
+
+<Aside type="tip" title="With Claude Code">
+Before accepting an agent's diff, go through every REST route, `#[Ajax]`, role and meta it added with the same questions: who can call it? which capability guards it? what does an anonymous visitor see? Then run `pollora doctor`, which reads roles, meta and bindings.
+</Aside>
+
+<SpotTheBug
+  id="m12-agent-diff"
+  title="Reviewing an agent's diff"
+  variant="diff"
+  language="diff"
+  code={`--- a/app/Cms/Api/EventAttendeesAPI.php
++++ b/app/Cms/Api/EventAttendeesAPI.php
+@@ -0,0 +1,12 @@
++<?php
++
++#[WpRestRoute('app/v1', 'events/(?P<id>\\\\d+)/attendees', permissionCallback: Everyone::class)]
++class EventAttendeesAPI
++{
++    #[Method('GET')]
++    public function attendees(int $id): array
++    {
++        return $this->attendees->forEvent($id);
++    }
++}
+--- a/app/Cms/Roles/EventManager.php
++++ b/app/Cms/Roles/EventManager.php
+@@ -3,6 +3,7 @@
+-#[Role('event_manager', label: 'Event manager', inherits: 'author')]
++#[Role('event_manager', label: 'Event manager', inherits: 'author', allowSensitive: true)]
+ #[Grants('moderate_comments')]
++#[Grants('manage_options')]
+ final class EventManager {}
+--- a/app/Cms/Meta/MemberProfile.php
++++ b/app/Cms/Meta/MemberProfile.php
+@@ -4,6 +4,9 @@
+ #[UserMeta]
+ class MemberProfile
+ {
+     #[Meta(showInRest: true)]
+     public bool $newsletterOptIn = false;
++
++    #[Meta(showInRest: true, public: true, label: 'Phone')]
++    public ?string $phone = null;
+ }
+--- a/functions.php
++++ b/functions.php
+@@ -10,3 +10,4 @@
+ pollora_register(ModuleType::Theme);
++add_action('wp_ajax_nopriv_export_attendees', 'export_attendees');`}
+  bugs={[
+    { line: 6, why: "The attendee list is served to everyone with Everyone. A route with no permission would have been refused: the agent 'fixed' it by opening it. It needs a real permission, for example new Can(EventCap::ExportAttendees)." },
+    { line: [19, 21], why: "The agent added allowSensitive: true to get manage_options onto an event-management role. The flag exists to make the choice visible in review, and here it is the choice to refuse." },
+    { line: 32, why: "public: true on a user meta: pollora/author-meta can then show the phone number to any visitor." },
+    { line: 39, why: "A raw add_action on wp_ajax_nopriv_* opens the export to any unauthenticated visitor, bypassing #[Ajax] (logged-in by default) and the rule of calling no WordPress registration function directly." },
+  ]}
+/>
+
+## Check what you remember
+
+<Quiz title="Writing a title typed in the editor">
+In `render.blade.php`, how do you write the `$attributes['heading']` title typed by an editor?
+
+- [ ] `{!! $attributes['heading'] !!}`, like `$content`
+  > `{!! !!}` is reserved for `get_block_wrapper_attributes()` and `$content`, which WordPress already escaped.
+- [x] `{{ $attributes['heading'] ?? '' }}`
+- [ ] `{!! esc_url_raw($attributes['heading']) !!}`
+  > `esc_url_raw()` is for URLs, and the output stays raw.
+
+`{{ }}` escapes; raw output is the exception.
+
+</Quiz>
+
+<Quiz title="An AJAX handler opened by mistake">
+An agent declares `#[Ajax('my_orders', access: AjaxAccess::ALL)]` for a handler that returns a customer's orders. What is wrong?
+
+- [x] `ALL` adds `wp_ajax_nopriv_my_orders`: a logged-out visitor can call it
+- [ ] Nothing: without a nonce, WordPress always refuses the call
+  > The AJAX page does not say who verifies the nonce on the server.
+- [ ] `ALL` is the default of `#[Ajax]`
+  > The default is `AjaxAccess::LOGGED`.
+
+The default (logged-in only) is enough here; opening a handler to the public is a decision to make consciously.
+
+</Quiz>
+
+<Quiz title="A REST route without a permission">
+A `#[WpRestRoute]` route returns the attendee list and names no permission. The agent "fixes" it with `Everyone::class`. What is the right correction?
+
+- [ ] Keep `Everyone::class`: that is what the documentation asks for
+  > `Everyone` is for routes that are public on purpose.
+- [x] `permissionCallback: new Can(EventCap::ExportAttendees)`
+- [ ] `permissionCallback: Can::class`
+  > `Can` takes arguments: pass an instance.
+
+Without a permission the route was refused (`rest_forbidden`): that was the right default behaviour.
+
+</Quiz>
+
+<Quiz title="Granting manage_options">
+What happens to `#[Role('helper')]` with `#[Grants('manage_options')]` and no `allowSensitive: true`?
+
+- [ ] The role gets the capability, with a warning
+- [x] Discovery refuses the declaration: the error is logged with the class named, and it is not applied
+- [ ] The role gets the capability but not for existing users
+  > This behaviour does not exist in the documentation.
+
+Adding `allowSensitive: true` only makes the choice visible in code review: the review has to refuse it when it has no reason to be.
+
+</Quiz>
+
+<Quiz title="An ability with no check">
+What does an ability declared with neither `can()` nor `authorize()` do?
+
+- [ ] It is public, like a REST route without a permission before 2.0
+- [x] It refuses everything: a forgotten check makes it unusable rather than public
+- [ ] It is reserved for administrators
+  > There is no such rule: without a permission, nothing is allowed.
+
+The behaviour annotations, on the other hand, are advisory: the permission is what protects the site.
+
+</Quiz>
+
+<QuizResults />
+
+## Going further
+
+- [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/#rendering-with-blade): escaping in `render.blade.php`
+- [REST API](https://pollora.dev/advanced/rest-api/) and [AJAX](https://pollora.dev/advanced/ajax/): permissions and access levels
+- [Middleware](https://pollora.dev/routing/middleware/): sessions, the `web` group and CSRF
+- [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/): safety rules, `pollora:roles:*`
+- [Typed Meta](https://pollora.dev/content/typed-meta/) and [Block Bindings](https://pollora.dev/blocks/block-bindings/#security): data visibility
+- [Abilities](https://pollora.dev/advanced/abilities/): permissions, behaviour, schema
+- [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/): what Nectar does and does not do
