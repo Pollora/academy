@@ -43,6 +43,9 @@ export function normalize(text) {
  */
 export function maskVersions(text) {
 	return text
+		// The banner colours the version and adds a mark ("✓", "↑") depending on whether it is the latest release:
+		// that depends on the day, not on the command
+		.replace(/\x1b\[3[0-9]m(Pollora v?\d+\.\d+\.\d+[-+.\w]*)(?: [✓↑])?\x1b\[39m/g, '$1')
 		.replace(/\b(Pollora v?)\d+\.\d+\.\d+(?:[-+.\w]*)?/g, '$1X.Y.Z')
 		.replace(/\b(Laravel |PHP )\d+\.\d+\.\d+/g, '$1X.Y.Z')
 		.replace(/\b(WordPress )\d+\.\d+(?:\.\d+)?/g, '$1X.Y');
