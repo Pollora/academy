@@ -1,0 +1,439 @@
+---
+title: "Module 15 · Tooling: WP-CLI, plugins, translations and logs"
+description: Write WP-CLI commands as attributes, build a plugin, route translations between Laravel and WordPress, read WordPress logs, and style menus and the login screen.
+sidebar:
+  label: 15 · Tooling
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. Facts come from the official documentation ([WP-CLI](https://pollora.dev/advanced/wp-cli/), [plugins](https://pollora.dev/advanced/plugins/), [translations](https://pollora.dev/core-concepts/translations/), [logging](https://pollora.dev/advanced/logging/), [menus](https://pollora.dev/theming/menus/), [theme structure](https://pollora.dev/theming/theme-structure/), [IDE setup](https://pollora.dev/getting-started/ide-setup/)): when in doubt, it is the source of truth. Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
+</Aside>
+
+**Duration: 55 min · Prerequisites: modules 1 to 3 (attributes, hooks), module 5 (themes) and module 7 (modules).**
+
+By the end of this module you will be able to write a WP-CLI command with attributes, create a Pollora plugin, pick the right form of `__()`, find WordPress warnings in your Laravel logs, and configure menus and the login screen from the theme.
+
+## 1. WP-CLI commands as attributes
+
+A custom WP-CLI command is a class carrying the `#[WpCli]` attribute. Pollora discovers and registers it: no `WP_CLI::add_command()` call. The slug is derived from the class name.
+
+```php
+use Pollora\Attributes\WpCli;
+use WP_CLI;
+
+#[WpCli]
+/**
+ * A simple hello world command
+ */
+class HelloWorldCommand
+{
+    public function __invoke(array $arguments, array $options): void
+    {
+        WP_CLI::success('Hello, World!');
+    }
+}
+```
+
+```bash
+wp hello-world
+```
+
+### Single command or suite of subcommands
+
+- **Single command**: one `__invoke(array $arguments, array $options)` method.
+- **Suite**: every **public** method becomes a subcommand.
+
+```php
+#[WpCli]
+/**
+ * User management commands
+ */
+class UserManagementCommand
+{
+    public function create(array $arguments, array $options): void { /* … */ }
+
+    public function listUsers(array $arguments, array $options): void { /* … */ }
+}
+```
+
+```bash
+wp user-management create
+wp user-management listUsers
+```
+
+### Slugs
+
+| Element | Rule |
+|---|---|
+| Class | The `Command` suffix is removed: `UserManagementCommand` gives `user-management`, `CacheHelper` gives `cache-helper` |
+| Method without `#[Command]` | WP-CLI uses the name **as written**: `listUsers()` answers to `listUsers` |
+| Method with argument-less `#[Command]` | The slug is derived from the method name: `createUser()` gives `create-user` |
+| `#[Command('rm')]` | Custom slug |
+| `#[WpCli('cache')]` | Custom command slug |
+
+<Aside type="caution" title="Trap: listUsers is not list-users">
+Without `#[Command]` on the method there is no kebab-case conversion. To get `list-users`, add `#[Command]` (with no argument) to the method.
+</Aside>
+
+### The other attributes
+
+| Attribute | Role |
+|---|---|
+| `#[Synopsis('<name> [--greeting=<greeting>]')]` | Declares arguments and options |
+| `#[When('after_wp_load')]` | When the command is available (`after_wp_load` is the usual case, `before_wp_load` exists) |
+| `#[BeforeInvoke([...])]` / `#[AfterInvoke([...])]` | Callbacks before and after the command |
+| `#[IsDeferred(false)]` | Registers immediately (the default is `true`) |
+
+A class can receive its dependencies through its constructor: the same instance runs the command and all its subcommands. This needs `pollora/wp-cli` 0.1.1 or later (Pollora 13.36); before that, WP-CLI built the class without arguments.
+
+### Where to put it, how to generate it
+
+Discovery looks for commands in `app/Cms/Commands/`, `themes/{theme}/app/Cms/Commands/` and `plugins/{plugin}/app/Cms/Commands/`.
+
+```bash
+pollora make:wp-cli TestCommand --description="Test command"
+pollora make:wp-cli ThemeCommand --theme=mytheme --description="Theme utilities"
+```
+
+`--description` (`-d`) is required. Other options: `--force`, `--theme`, `--plugin`, `--module`, `--path`.
+
+## 2. Building a plugin
+
+A Pollora plugin is a WordPress plugin with Laravel architecture around it: service providers, dependency injection, attributes, Vite.
+
+```bash
+pollora make:plugin my-awesome-plugin \
+    --plugin-author="John Doe" \
+    --plugin-author-uri="https://johndoe.com" \
+    --plugin-uri="https://github.com/johndoe/my-awesome-plugin" \
+    --plugin-description="An awesome plugin built with Pollora" \
+    --plugin-version="1.0.0" \
+    --asset=true
+```
+
+`--asset=true` adds `vite.config.js`, `package.json`, `resources/assets/` and an `AssetServiceProvider`; the default is `false` (a minimal, backend-oriented plugin). Other options: `--repository=owner/repo`, `--repo-version`, `--force`.
+
+### Registration and structure
+
+The plugin's main file carries the WordPress headers and registers the plugin with Pollora:
+
+```php
+use Pollora\Modules\Domain\Enums\ModuleType;
+
+pollora_register(ModuleType::Plugin, 'my-awesome-plugin', __DIR__);
+```
+
+For a plugin, the slug and the directory are **required**. Code lives in `app/`, autoloaded as PSR-4 under the fixed namespace `Plugin\{PluginName}\` (`Plugin\MyAwesomePlugin\` here), with `src/` as a fallback.
+
+```text
+public/content/plugins/my-awesome-plugin/
+├── app/
+│   ├── Providers/            # service providers, discovered
+│   └── MyAwesomePluginPlugin.php
+├── resources/{assets,views}/
+├── config/plugin.php
+├── languages/
+├── routes/
+├── database/
+├── vite.config.js            # with --asset=true
+└── my-awesome-plugin.php
+```
+
+<Aside type="caution" title="Trap: keep your classes in app/">
+Discovery walks a directory in full. A plugin with neither `app/` nor `src/` is scanned at its root, where `node_modules/` lands as soon as there is a Vite build: the documentation measures 1,691 ms against 1 ms, with 69,741 files walked. While `APP_DEBUG` is on, discovery keeps no cache and that cost is paid on every request.
+</Aside>
+
+### Providers, hooks, assets
+
+The service providers in `app/Providers/` are discovered; views, routes, translations and migrations are handled by the modules system. Keep the provider for your own services. Hooks are written as attributes:
+
+```php
+use Pollora\Attributes\Action;
+use Pollora\Attributes\Filter;
+
+class MyAwesomePluginPlugin
+{
+    #[Action('init', priority: 10)]
+    public function onInit(): void { /* … */ }
+
+    #[Filter('the_content', priority: 10)]
+    public function modifyContent(string $content): string
+    {
+        return str_replace('old', 'new', $content);
+    }
+}
+```
+
+Assets go through the `AssetServiceProvider` and a plugin-specific container (`plugin.{slug}`):
+
+```php
+Asset::add("{$slug}/admin", 'admin.js')
+    ->container("plugin.{$slug}")
+    ->toBackend()
+    ->useVite();
+```
+
+```bash
+cd public/content/plugins/my-plugin
+npm install
+npm run dev     # hot reload
+npm run build
+```
+
+To list and inspect: `pollora plugin:list` (options `--active`, `--detailed`, `--format=json`) and `pollora plugin:status [name]`.
+
+### Plugin or module?
+
+A **module** groups features specific to one project, hard to reuse elsewhere; a **plugin** is generally generic and reusable across projects. Everything that works in `app/` (post types, taxonomies, hooks) works in a module. Module 7 covers [modules](/en/modules/07-async-schedule-modules/): unless you need to ship the code to other sites, a module is the right default.
+
+## 3. Translations: which form of `__()`?
+
+A Pollora project sits on two systems: **gettext** (`.po`/`.mo`, text domain) for WordPress, WooCommerce and plugins, and the **Laravel translator** (JSON or arrays) with named placeholders and plurals. Pollora overrides `__()` (the `pollora/helper-overrider` package): **the second argument decides**.
+
+| Call | Resolved by |
+|---|---|
+| `__('Save changes')` | Laravel, then the WordPress `default` domain (the only ambiguous case) |
+| `__('Save changes', 'my-plugin')` | WordPress, domain `my-plugin`: Laravel is **never** consulted |
+| `__('Shipping :brand', ['brand' => $name])` | Laravel, then the `default` domain; placeholders are always filled |
+
+There is no prefix to force a side: pass a domain for WordPress, or a replacement array (even a single entry) for Laravel.
+
+### WordPress side: `.po`/`.mo`
+
+The domain and the directory are declared in the header (`style.css` for a theme, the main file for a plugin):
+
+```text
+Text Domain: my-theme
+Domain Path: /languages
+```
+
+WordPress loads the `.mo` by itself: you do not call `load_theme_textdomain()`. But the **file name** differs:
+
+| Location | Expected name |
+|---|---|
+| Inside the theme (`Domain Path`) | `{locale}.mo`, for example `themes/my-theme/languages/fr_FR.mo` |
+| A plugin, or a theme catalogue in `WP_LANG_DIR` | `{domain}-{locale}.mo`, for example `my-plugin-fr_FR.mo` |
+
+Getting it wrong fails silently: the domain never loads and everything stays untranslated. The usual round trip: `wp i18n make-pot` to extract, one `.po` per locale, then compile. Pollora ships a pure-PHP `.po` to `.mo` compiler (`GettextMoCompiler`, no `msgfmt`), and `pollora make:theme` compiles the `.po` files of the generated theme's `languages/` directory.
+
+In theme config files, `__($text, 'domain')` is safe only in `menus.php`, `sidebars.php` and `templates.php`, which are deferred to `init`. Elsewhere (`supports.php`, `images.php`…) config is read too early (before `after_setup_theme`): the string comes back untranslated.
+
+### Laravel side: `lang/`
+
+Themes and modules have a **namespaced** catalogue, rooted at their `lang/` directory:
+
+```php
+// themes/my-theme/lang/fr/messages.php
+return ['welcome' => 'Bienvenue'];
+
+__('my-theme::messages.welcome');   // 'Bienvenue'
+trans('shop::checkout.confirm');    // module Shop
+```
+
+Keys without a namespace resolve against the `lang/` directory at the project root (`lang/fr.json`), which Pollora does not create for you. `trans_choice()` and the other Laravel helpers work as usual: only `__()` is overridden.
+
+<Aside type="caution" title="Trap: APP_LOCALE changes nothing">
+Both sides follow the **WordPress site** locale (`get_locale()`), not `config('app.locale')`. `APP_LOCALE` only matters at install time (`pollora:install`). To change the language: Settings › General. On an `fr_FR` site, the Laravel lookup tries `fr_FR` then `fr`: a plain `lang/fr.json` is enough.
+</Aside>
+
+Which side to pick? WordPress for theme or plugin markup translated by non-technical contributors, WPML/Polylang compatibility, or a catalogue you do not own; Laravel for application logic, named placeholders, plurals and translations versioned as JSON.
+
+## 4. Logs: WordPress errors in Laravel
+
+Pollora captures three families of WordPress incidents and writes them to the **`wordpress` log channel** instead of showing them to visitors:
+
+| Incident | Level |
+|---|---|
+| `_doing_it_wrong` (function used incorrectly) | `warning` |
+| Deprecated function | `info` |
+| Deprecated argument | `info` |
+
+Nothing to register: the main service provider wires it up. The context carries the type, function, version, message, URL, HTTP method and IP; in a local environment a backtrace of at most 10 frames is added.
+
+```env
+WORDPRESS_LOG_LEVEL=debug
+WORDPRESS_LOG_DAYS=7
+```
+
+```php
+// config/logging.php
+'channels' => [
+    'wordpress' => [
+        'driver' => 'single',
+        'path' => storage_path('logs/wordpress.log'),
+        'level' => env('WORDPRESS_LOG_LEVEL', 'debug'),
+        'days' => env('WORDPRESS_LOG_DAYS', 7),
+        'replace_placeholders' => true,
+    ],
+],
+```
+
+With the `single` driver the file is `storage/logs/wordpress.log`; with `daily`, `storage/logs/wordpress-YYYY-MM-DD.log`. Since it is a Laravel channel, you can point it at a `stack`, Slack, and so on. You can also log by hand with the `Pollora\Support\Facades\WordPressError` facade (`doingItWrong()`, `deprecatedFunction()`, `deprecatedArgument()`). In production the documentation advises `WORDPRESS_LOG_LEVEL=info` and log rotation.
+
+To watch these incidents live during development, [Laravel Debugbar through `pollora/debugbar`](/en/modules/08-media-woocommerce-performance/) (`composer require --dev pollora/debugbar`, Pollora 13.35.3 or later) adds the WordPress tabs; module 8 covers it. WordPress's own notices stay in the `wordpress` channel.
+
+## 5. Menus and the login screen
+
+### Menus: rules by depth and position
+
+`wp_nav_menu()` accepts three configuration keys: `link_config` (links), `item_config` (list items) and `submenu_config` (submenus). Each rule holds `depth` (**required**), optionally `eq` (item index, 0-based), `class` and `attrs`.
+
+```php
+wp_nav_menu([
+    'theme_location' => 'main_menu',
+    'link_config' => [
+        ['depth' => 0, 'class' => ['text-gray-700', 'hover:text-blue-500']],
+        ['depth' => 0, 'eq' => 2, 'class' => 'text-blue-500'],   // the third item
+        ['depth' => 1, 'class' => 'text-gray-600'],
+    ],
+]);
+```
+
+Menu locations are declared in the theme's `config/menus.php` (one of the files where `__()` is safe):
+
+```php
+return [
+    'menu-header' => __('Menu header', 'my-theme'),
+    'menu-footer' => __('Menu footer', 'my-theme'),
+];
+```
+
+### The login screen
+
+WordPress loads your theme on `wp-login.php` without printing your design there. Pollora can, **opt-in**: with no `config/login.php`, the WordPress screen is unchanged, byte for byte.
+
+```php
+// themes/your-theme/config/login.php
+return [
+    'enabled' => true,
+    'logo' => [
+        'source' => 'resources/assets/images/logo.svg',
+        'width' => 220,
+        'url' => home_url('/'),
+        'text' => get_bloginfo('name', 'display'),
+    ],
+    'powered_by' => true,
+];
+```
+
+Colours, radii and typography are **not** in this file: Pollora reads them from `theme.json`, so restyling the theme restyles the login screen. Each design role (`primary`, `foreground`, `radius`, `font`…) accepts a list of preset slugs, most specific first; a theme that names things differently adds a `tokens` key:
+
+```php
+'tokens' => [
+    'primary' => ['brand-600', 'brand-500'],  // slugs to try, in order
+    'accent' => 'oklch(70% .2 30)',           // a value no preset holds
+],
+```
+
+A logo file inside the theme has no URL (only the Vite build is web-served): Pollora reads the file and inlines it (SVG, PNG, JPEG, GIF, WebP, AVIF, up to 96 KB). Four filters let a plugin or module take over without touching the theme: `pollora/login/palette`, `pollora/login/logo`, `pollora/login/styles` and `pollora/login/credit`.
+
+## 6. The IDE
+
+If the IDE does not suggest WordPress's native functions, its PHP include path is incomplete. Add `public/cms` and `vendor`: in PhpStorm, Settings › PHP › Include Path; in VS Code, the `php.includePath` setting.
+
+```json
+{
+  "php.includePath": ["./public/cms", "./vendor"]
+}
+```
+
+Restart the IDE afterwards. To check: `get_post()` should be suggested with its documentation. With PHP Intelephense, the path can also be set in its own settings.
+
+## Try it on your project
+
+Documented commands only, on your Pollora project (or a throwaway one):
+
+1. `pollora plugin:list --detailed` then `pollora plugin:status`: spot the plugins Pollora knows about.
+2. Generate a command: `pollora make:wp-cli HelloWorldCommand --description="Test command"`. Read the generated class: does it carry `#[WpCli]`? Which slug does the `Command` suffix rule give? Run `php artisan discovery:clear` (or `ddev exec php artisan discovery:clear`) then `wp hello-world`.
+3. Ask Claude Code to check that your `__()` calls follow the routing table in part 3, and that no theme config outside `menus.php`, `sidebars.php` and `templates.php` calls `__($text, 'domain')`.
+4. Delete the trial class.
+
+## Check what you learned
+
+<Quiz title="Which form of __()?">
+You write `__('Add to cart', 'my-theme')` in a Blade view, then `__('Shipping :brand', ['brand' => $name])`. Where are these calls resolved?
+
+- [ ] Both by Laravel, with WordPress as fallback
+  > A string second argument is a text domain: it is an explicit WordPress call.
+- [x] The first by the gettext catalogue of the `my-theme` domain, without consulting Laravel; the second by Laravel, falling back to the `default` domain
+- [ ] Both by WordPress, because `__()` belongs to WordPress
+  > A non-empty replacement array is a Laravel call: gettext has no named placeholders.
+- [ ] The first by Laravel, which looks in `lang/my-theme.json`
+  > Laravel is never consulted when a domain is given.
+
+The rule lives in the second argument: a string leads to WordPress, a non-empty array to Laravel.
+</Quiz>
+
+<Quiz title="The theme catalogue stays in English">
+A theme declares `Text Domain: my-theme` and `Domain Path: /languages`. You put `my-theme-fr_FR.mo` there, the site is in French (`fr_FR`) and you set `APP_LOCALE=fr` in `.env`. Strings stay in English. What is the cause and the fix?
+
+- [ ] You need to call `load_theme_textdomain()` in `functions.php`
+  > WordPress loads the `.mo` by itself, you call nothing.
+- [x] Inside the theme, WordPress looks for `{locale}.mo`: rename it to `fr_FR.mo`
+- [ ] `APP_LOCALE` must be `fr_FR`
+  > `APP_LOCALE` has no effect on a running site: the locale comes from WordPress (`get_locale()`).
+- [ ] You need to compile with `msgfmt`, Pollora's compiler cannot read theme `.po` files
+  > Pollora's PHP compiler does not require `msgfmt`.
+
+The `{domain}-{locale}.mo` name is for a plugin or a catalogue in `WP_LANG_DIR`, not for a catalogue inside a theme.
+</Quiz>
+
+<Quiz title="Where do WordPress logs go?">
+A plugin calls `_doing_it_wrong()` on a public page. What does Pollora do?
+
+- [ ] It prints the warning in the page so the developer sees it
+  > The system writes to a log and keeps it from being shown to visitors.
+- [x] It writes a `warning`-level entry to the `wordpress` log channel
+- [ ] It writes an `info` entry to `storage/logs/laravel.log`
+  > `info` is the level of deprecated functions and arguments, and the dedicated channel is `wordpress`.
+- [ ] It does nothing until `pollora/debugbar` is installed
+  > Debugbar is optional and development-only; logging works without it.
+
+Deprecated functions and arguments go to the same channel, at the `info` level.
+</Quiz>
+
+<Quiz title="What a WP-CLI command must declare">
+Which statements about a Pollora WP-CLI command are true?
+
+- [x] The class carries the `#[WpCli]` attribute
+- [x] A single command uses `__invoke()`, a suite uses public methods
+- [x] A `listUsers()` method without `#[Command]` answers to `wp user-management listUsers`
+- [ ] You must register it by hand with `WP_CLI::add_command()`
+  > Discovery does it, in `app/Cms/Commands/` and the matching theme and plugin directories.
+- [ ] `listUsers()` automatically becomes `list-users`
+  > Without `#[Command]`, WP-CLI keeps the name as written.
+
+The class slug does lose its `Command` suffix: `UserManagementCommand` gives `user-management`.
+</Quiz>
+
+<Quiz title="Module or plugin?">
+Which feature is more of a plugin than a module?
+
+- [ ] A portfolio (post type, block, scheduled task) tied to one client's business rules
+  > A project-specific feature: the use case for a module.
+- [x] A payment connector you will install as-is on several client sites
+  > A plugin is generally generic and reusable across projects.
+- [ ] A site-specific taxonomy, declared with `#[Taxonomy]`
+  > Attributes work in `app/` and in a module, no plugin needed.
+- [ ] A plugin cannot use attributes, it has to go through `add_action()`
+  > Pollora plugins use `#[Action]` and `#[Filter]`.
+
+Module 7's criterion: specific to a project, so a module; generic and reusable, so a plugin.
+</Quiz>
+
+<QuizResults />
+
+## Going further
+
+- [WP-CLI commands](https://pollora.dev/advanced/wp-cli/)
+- [Plugin development](https://pollora.dev/advanced/plugins/)
+- [Translations](https://pollora.dev/core-concepts/translations/)
+- [Logging](https://pollora.dev/advanced/logging/)
+- [Menus](https://pollora.dev/theming/menus/)
+- [Theme structure (login screen)](https://pollora.dev/theming/theme-structure/)
+- [Debugging with Debugbar](https://pollora.dev/advanced/debugging/)
+- [IDE setup](https://pollora.dev/getting-started/ide-setup/)
+- [Modules](https://pollora.dev/advanced/modules/)
