@@ -36,3 +36,5 @@ jobs:
             number="$(basename "$dir" | cut -c1-2)"
             lab/bin/lab verify "$number"
           done
+      - name: The recorded terminal sessions still match what Pollora prints
+        run: lab/bin/lab capture --check
