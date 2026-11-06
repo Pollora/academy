@@ -1,0 +1,231 @@
+---
+title: "Module 14 · Testing and deploying"
+description: Test a Pollora project, diagnose it with pollora:doctor and put it into production with a go-live checklist you can verify.
+sidebar:
+  label: 14 · Testing and deploying
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. Facts come from the official documentation: [Dashboard & Status](https://pollora.dev/advanced/dashboard/), [Auto-Discovery](https://pollora.dev/core-concepts/auto-discovery/), [Server Configuration](https://pollora.dev/getting-started/server-configuration/), [Configuration](https://pollora.dev/getting-started/configuration/), [WordPress Configuration](https://pollora.dev/core-concepts/wordpress-config/), [Asynchronous Actions](https://pollora.dev/hooks/async-actions/), [Theme Structure](https://pollora.dev/theming/theme-structure/), [Debugging](https://pollora.dev/advanced/debugging/), [Nectar](https://pollora.dev/nectar/overview/) and [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/). When in doubt, it is the source of truth. Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)). On a server with neither DDEV nor the Pollora CLI, type the `php artisan pollora:<name>` form.
+</Aside>
+
+**Duration: 60 min · Prerequisites: modules 1 to 8 (especially 7 for cron and the queue, and 8 for media), and the theme from module 5.**
+
+By the end of this module you will know what to test in a Pollora project, how to read a `pollora:doctor` report, and how to apply to your own project a go-live checklist where every line is checked by a command or a request.
+
+## 1. Testing a Pollora project
+
+The documentation has no single page about tests: it gives pieces, module by module. This is what is documented.
+
+- **The runner.** The documentation's examples use PHPUnit classes (`TestCase`), run with `composer test` or `vendor/bin/phpunit tests/…`. A module generated with `pollora make:module Portfolio --tests` gets `tests/Feature`, `tests/Unit` and a Pest test (see [module 7](/en/modules/07-async-schedule-modules/)).
+- **Asynchronous actions.** `Async::fake()` records what would be queued without running it; `Async::assertDispatched()`, `assertDispatchedTimes()` and `assertNotDispatched()` check it; `Async::runDispatched()` then runs what was recorded. Without `fake()`, `HOOKS_ASYNC_DRIVER=sync` runs everything at once, which suits end-to-end tests.
+- **Scheduling.** `Schedule::fake()` schedules nothing and attaches no handler; `Schedule::reset()` brings the real driver back.
+- **Options.** The `OptionRepositoryInterface` contract is a stable public interface, meant to be mocked in a unit test.
+- **The environment.** An `APP_ENV` of `testing` is seen by WordPress as `development`, and Debugbar never runs in the `testing` environment.
+
+```php
+use Pollora\Hook\Async\Async;
+
+Async::fake();
+
+wp_update_post(['ID' => $event->ID, 'post_title' => 'New title']);
+
+Async::assertDispatched(SyncEventToCrm::class);
+Async::assertNotDispatched(Indexer::class);
+```
+
+<Aside type="tip" title="With Claude Code">
+Ask Claude Code to write the test of an asynchronous action with `Async::fake()` and to run it, rather than running the action in `sync` by hand. The test fails if `#[Async]` is removed, which is exactly what you want to know.
+</Aside>
+
+Tests do not replace diagnosis: a PHP test does not see a missing theme build or a stale discovery cache. That is the doctor's job.
+
+## 2. Diagnosing: `pollora:status` and `pollora:doctor`
+
+The two commands answer two different questions.
+
+- **`pollora status`** says **what is there**: PHP, Laravel and WordPress versions, `WP_DEBUG`, multisite, post types, taxonomies, hooks, REST routes, scheduled tasks, modules, the state of the discovery cache, the active theme. `--json` gives the same for a script or an agent. The **Tools › Pollora** screen in the admin shows the same cards.
+- **`pollora doctor`** says **whether it works**, and under each problem gives the command that fixes it. It looks for **silent** failures: the site renders, every command exits 0.
+
+```bash
+pollora doctor
+pollora doctor --json
+```
+
+The command exits `1` when a check finds an **error** (warnings exit 0), so it can gate a deploy or a CI job. The checks that matter for going live:
+
+| Check | What it catches |
+|---|---|
+| Environment file | a `.env` naming variables Pollora does not read (`DB_NAME`, `WP_HOME`…) |
+| Application URL | `APP_URL` without a scheme |
+| Configuration and route caches | configuration or routes cached **outside production**: edits to `.env` or `routes/` are ignored |
+| Discovery cache | classes added since the cache was written, which are not registered, named one by one |
+| Theme, plugin and module builds | a build missing, or written to another folder than Pollora reads |
+| Core patch and patches lock | the WordPress core not patched, `patches.lock.json` missing or too old |
+| Asynchronous actions | an ignored `#[Async]`, overdue WP-Cron events, queued jobs with nothing to run them |
+
+The doctor is also in **Tools › Site Health**, with a *Pollora* badge, plus two checks that need a web request: every block is registered, and **the web server's document root is `public/`** (an error when `/.env` is served as a text file).
+
+## 3. Going to production, point by point
+
+### The discovery cache
+
+Outside debug mode, discovery scans are stored in Laravel's cache (`pollora` prefix, one entry per location). In debug mode (`APP_DEBUG=true`) there is no persistent cache and every request scans the disk.
+
+That is the classic first-deployment trap: **a class added after the cache was written is not discovered until the cache is cleared**.
+
+```bash
+php artisan discovery:clear
+```
+
+`discovery:run` runs the discoveries (`--clear-cache` clears first, `--discovery=post_types` targets one). `pollora doctor` names the classes on disk that the cache lacks.
+
+### Theme assets
+
+The theme is built with Vite, from the theme folder: `npm install`, then `npm run build` for production (`npm run dev` is for development only). The build writes a `manifest.json`; without it, the theme's assets cannot be resolved, and a leftover `hot` file points at a stopped dev server. The doctor checks the builds of the active theme, of every Pollora plugin and of every enabled module. The same `npm run build` also writes the `theme.json` the editor reads.
+
+### Environment and debug
+
+`APP_ENV` and `APP_DEBUG` are separate settings, and Pollora relies on both.
+
+| Setting | What it decides |
+|---|---|
+| `APP_ENV` | WordPress's environment type: `local`, `dev`/`development`/`testing` → `development`, `staging`, and `prod`, `production` or any other value → `production`. Independent of `APP_DEBUG` |
+| `APP_DEBUG` (debug mode) | `WP_DEBUG`; the discovery cache (off in debug); what happens to an asynchronous argument that cannot travel (exception in debug, synchronous run and a log entry otherwise) |
+
+The discovery cache follows **debug mode**, not the environment name: `APP_ENV=production` with `APP_DEBUG=true` still gives a site with no discovery cache and an active `WP_DEBUG`.
+
+Never commit `.env`. WordPress's authentication keys and salts are generated at installation (`AUTH_KEY`, `NONCE_SALT`…) and come from `.env` through `config/wordpress.php`; the database must be MySQL or MariaDB, with Laravel's variable names (`DB_DATABASE`, `DB_USERNAME`…).
+
+### Development tools that must not ship
+
+- **Debugbar** (`pollora/debugbar`) is installed with `composer require --dev`: `composer install --no-dev` leaves it out, so a deployment never ships it. It never runs in the `production` or `testing` environments anyway, and is driven by `DEBUGBAR_ENABLED` (or `APP_DEBUG` when that is not set). See [module 8](/en/modules/08-media-woocommerce-performance/).
+- **Nectar** is a development package (`composer require pollora/nectar --dev`) that only loads in the `local` or `development` environment. See [module 9](/en/modules/09-nectar/).
+
+### Cron, queue and scheduling
+
+Pollora defines `DISABLE_WP_CRON`: a page load never runs WP-Cron. Without a system cron, scheduled events and asynchronous actions on WP-Cron or Action Scheduler **never run, with no error**. With the `queue` driver or the `laravel` scheduling driver, a worker has to be kept alive. The detail is in [module 7](/en/modules/07-async-schedule-modules/); in short:
+
+```bash
+* * * * * curl -s https://example.com/cms/wp-cron.php > /dev/null
+php artisan queue:work database
+```
+
+### HTTP caching for anonymous visitors
+
+For a visitor who is not logged in, the `WordPressHeaders` middleware replaces WordPress's no-cache headers on HTML responses with `public, must-revalidate, max-age=…`. The default is 3600 seconds (`WP_CACHE_MAX_AGE`), with optional per-condition TTLs (`wordpress.cache.ttl`) and `s-maxage`. It respects `DONOTCACHEPAGE` and any `max-age`, `s-maxage` or `no-store` the application set itself.
+
+One thing to know if a cache (Varnish…) sits in front of the site: `Route::wp()` routes declared in `routes/web.php` inherit the `web` group and start a session on **every** request, anonymous visitors included, with two cookies. Setting `'sessions' => false` in `config/wordpress.php` spares them, with the consequences listed on the [Middleware page](https://pollora.dev/routing/middleware/#sessions-and-the-web-group) (no more `csrf_token()`, `old()` or CSRF check on those routes).
+
+### The server
+
+- **The document root is `public/`.** A server pointed at the project folder answers 404 on the home page and serves `/.env` as text, with the application key and the database password. If that happens: fix the root, then change `APP_KEY` and the passwords.
+- **Apache.** The skeleton's `public/.htaccess` sends requests for the directories of `content/` to the front controller (since 13.34.1) and turns directory listing off (`Options -Indexes`).
+- **Nginx.** In `location /`, `try_files $uri /index.php?$query_string;` **without** `$uri/`: otherwise an empty `index.php` in a `content/` directory answers a blank 200. `/cms/wp-admin` keeps `$uri/`.
+- **HTTPS behind a proxy.** Pollora derives HTTPS from `APP_URL`, not from headers: with `APP_URL=https://…` it forces the HTTPS scheme for Laravel, sets `$_SERVER['HTTPS']` and computes `WP_HOME`, `WP_SITEURL` and `WP_CONTENT_URL`. No `X-Forwarded-Proto` mapping is needed. `TrustProxies` is only for the client IP or rate limiting, and `at: '*'` trusts all proxies: restrict it in production.
+- **The site is opened at the `APP_URL` address**, otherwise the admin redirects to that host.
+
+### Media
+
+If the media library lives on an S3 or compatible disk, check `pollora media:status` (disk, public URL, test write). Without a CDN in front of S3, declare the sizes you use `eager()` and run `pollora media:thumbs:warm`. The detail is in [module 8](/en/modules/08-media-woocommerce-performance/).
+
+## 4. Go-live checklist
+
+Apply it to your own project, in order. Each line has an **objective check**. Ask Claude Code to walk through the list and report, line by line, the output of each command.
+
+<Aside type="caution" title="What the documentation does not say">
+It gives no complete deployment procedure (order of commands, caching the configuration and routes, hosting providers). This checklist relies only on what is documented; adapt it to your hosting.
+</Aside>
+
+1. **Document root = `public/`.** Check: `curl -I https://your-site/.env` does not answer 200 with the file's content, and the *Document root* line of Tools › Site Health is green.
+2. **Environment.** `APP_ENV=production`, debug mode off, `APP_URL` with its `https://` scheme. Check: `pollora status` shows `WP_DEBUG: off`, and `pollora doctor` reports no suspicious `.env` or `APP_URL` without a scheme.
+3. **Dependencies without development tools.** `composer install --no-dev`. Check: `vendor/pollora/debugbar` and `vendor/pollora/nectar` are absent.
+4. **Compiled assets.** `npm run build` in the theme folder (and in each plugin or module that uses Vite). Check: `pollora doctor` reports no missing build, and `manifest.json` exists in the build folder.
+5. **Discovery cache up to date.** `php artisan discovery:clear` after every deployment that adds a class. Check: `pollora doctor` names no class missing from the cache, and the counts in `pollora status` match what you expect.
+6. **System cron and/or worker.** Depending on your drivers. Check: `pollora async:list` and `pollora schedule:list` show the expected drivers, and the doctor reports no overdue event or waiting job.
+7. **Media.** If a remote disk is configured: `pollora media:status` passes its test write.
+8. **HTTP caching.** Check: `curl -I https://your-site/` without a cookie answers with `Cache-Control: public, must-revalidate, max-age=…`. If a cache sits in front of the site, decide about sessions (`wordpress.sessions`) and look at the `Set-Cookie` headers.
+9. **Verdict.** `pollora doctor` exits with code `0`. A failure on this line blocks the go-live.
+
+## Check what you learned
+
+<Quiz title="The class that does not exist">
+You deploy a new `#[PostType('event')]` class. In production the post type does not appear in the admin. The code is on the server. What is the first thing to do?
+
+- [ ] Set `APP_DEBUG` to `true` in production to see the error
+  > That bypasses the cache but exposes the site; it is not a deployment fix.
+- [x] Clear the discovery cache (`php artisan discovery:clear`) and run `pollora doctor` again
+- [ ] Add a `register_post_type()` call in `functions.php`
+  > Pollora registers post types by attribute; calling WordPress functions by hand bypasses discovery.
+
+Outside debug mode, a class added after the cache was written is not discovered until it is cleared. The doctor names the classes the cache lacks.
+
+</Quiz>
+
+<Quiz title="The unstyled theme">
+After a deployment the site renders, but without the theme's CSS or JavaScript. No PHP error. What is the most likely cause, and the best first move?
+
+- [ ] The HTTP cache lasts too long; lower `WP_CACHE_MAX_AGE`
+  > HTTP caching does not explain missing compiled assets.
+- [x] The theme's Vite build is missing; run `pollora doctor`, then `npm run build` in the theme folder
+- [ ] `DISABLE_WP_CRON` is defined
+  > That constant concerns WP-Cron, not asset loading.
+
+The doctor checks the builds of the active theme, plugins and modules: it is the first move for a silent failure.
+
+</Quiz>
+
+<Quiz title="Production, but not quite">
+A site has `APP_ENV=production` and `APP_DEBUG=true`. What does the documentation say?
+
+- [x] The persistent discovery cache is off: every request scans the disk
+- [x] `WP_DEBUG` is on, because it follows debug mode
+- [x] Debugbar does not show, because it never runs in the `production` environment
+- [ ] WordPress considers itself in the `development` environment
+  > WordPress's environment type comes from `APP_ENV`, independently of `APP_DEBUG`: here, `production`.
+
+The discovery cache and `WP_DEBUG` follow **debug mode**, not the environment name. An asynchronous argument that cannot travel also throws an exception, instead of running synchronously.
+
+</Quiz>
+
+<Quiz title="The task that never runs">
+A project declares `#[Schedule(Every::DAY)]` with the default `wp-cron` driver. In production the task never runs and no error appears. Where do you look first?
+
+- [ ] In the Debugbar logs
+  > Debugbar does not run in production, and nothing has failed: nothing runs.
+- [x] At the system cron: Pollora defines `DISABLE_WP_CRON`, so something must call `wp-cron.php`
+- [ ] In `config/media.php`
+  > Media has nothing to do with scheduling.
+
+`pollora doctor` flags overdue WP-Cron events. With the `laravel` driver, the equivalent condition is a continuously running `queue:work` worker.
+
+</Quiz>
+
+<Quiz title="HTTPS behind a proxy">
+The site is served over HTTP by PHP behind a proxy that terminates TLS. What must be set so that generated URLs and WordPress redirects use HTTPS?
+
+- [ ] Map the `X-Forwarded-Proto` header in Pollora's configuration
+  > Not needed: Pollora does not read that signal to decide the scheme.
+- [x] Write `APP_URL=https://…`: Pollora derives the HTTPS scheme from it
+- [ ] Trust all proxies with `at: '*'`
+  > That concerns the client IP, not Pollora's scheme; in production, restrict it to your proxy.
+
+`TrustProxies` is still useful for the client IP and rate limiting, but HTTPS comes from `APP_URL`.
+
+</Quiz>
+
+<QuizResults />
+
+## Going further
+
+- [Dashboard & Status](https://pollora.dev/advanced/dashboard/)
+- [Auto-Discovery](https://pollora.dev/core-concepts/auto-discovery/)
+- [Server Configuration](https://pollora.dev/getting-started/server-configuration/)
+- [Configuration](https://pollora.dev/getting-started/configuration/)
+- [Asynchronous Actions](https://pollora.dev/hooks/async-actions/)
+- [Assets & Vite](https://pollora.dev/theming/assets-vite/)
+- [Media Storage](https://pollora.dev/advanced/media/)
+- [Debugging](https://pollora.dev/advanced/debugging/)
