@@ -1,0 +1,589 @@
+---
+/**
+ * Code-review exercise: click the faulty lines, check, optionally pick the right fix.
+ *
+ * Props
+ *  - title     heading of the exercise (page language)
+ *  - code      the snippet (a string; for variant="diff", a unified diff)
+ *  - bugs      [{ line: 3 | [3, 4], why: '...' }]  1-based lines of `code`; a list means "any of these lines"
+ *  - language  label shown on the card (php, blade, json, diff...), cosmetic
+ *  - variant   'code' (default) | 'diff' (only + lines, and lines a bug points to, are clickable)
+ *  - fix       optional { question, options: string[], answer: index, why }
+ *  - id        optional stable id for the saved progress (default: derived from the title)
+ */
+import { format, getStrings, normalizeBugs, parseLines, selectableLines, storageKey, validateBugs } from '../scripts/spot-the-bug.mjs';
+
+interface Bug {
+	line: number | number[];
+	why: string;
+}
+interface Fix {
+	question: string;
+	options: string[];
+	answer: number;
+	why?: string;
+}
+interface Props {
+	title: string;
+	code: string;
+	bugs: Bug[];
+	language?: string;
+	variant?: 'code' | 'diff';
+	fix?: Fix;
+	id?: string;
+}
+
+const { title, code, bugs, language, variant = 'code', fix, id } = Astro.props;
+const locale = Astro.currentLocale === 'en' ? 'en' : 'fr';
+const t = getStrings(locale);
+
+const lines = parseLines(code, variant);
+const errors = validateBugs(lines, bugs, variant);
+if (fix && (!fix.options?.length || !Number.isInteger(fix.answer) || fix.answer < 0 || fix.answer >= fix.options.length)) {
+	errors.push('fix.answer must be the index of one of fix.options');
+}
+if (errors.length > 0) {
+	throw new Error(`SpotTheBug "${title}": ${errors.join('; ')}`);
+}
+
+const selectable = selectableLines(lines, bugs, variant);
+const key = storageKey(id, title);
+const slug = key.split(':').pop();
+const total = bugs.length;
+
+const kindLabel = (kind: string) => (kind === 'add' ? t.lineAdded : kind === 'ctx' ? t.lineContext : '');
+const labelFor = (n: number, text: string, kind: string) =>
+	[format(t.line, { n }), kindLabel(kind)].filter(Boolean).join(', ') + ` : ${text.trim() === '' ? '(vide)' : text.trim()}`;
+
+// Everything the script needs, as JSON (a data block is not executable: the CSP does not care)
+const config = {
+	key,
+	total,
+	locale,
+	strings: t,
+	bugs: normalizeBugs(bugs),
+	fix: fix ? { answer: fix.answer, why: fix.why ?? '' } : null,
+};
+---
+
+<section class="stb" data-spot-the-bug aria-labelledby={`stb-title-${slug}`}>
+	<header class="stb-head">
+		<h3 id={`stb-title-${slug}`} class="stb-title">{title}</h3>
+		{language && <span class="stb-lang">{language}</span>}
+	</header>
+	<p class="stb-hint" data-hint>
+		{format(t.hint, { total })}
+		{variant === 'diff' && ` ${t.diffNote}`}
+	</p>
+
+	<ol class="stb-code" role="list" data-code data-variant={variant}>
+		{
+			lines.map((line) => (
+				<li class={`stb-row stb-${line.kind}`}>
+					{selectable.has(line.n) ? (
+						<button
+							type="button"
+							class="stb-line"
+							data-line={line.n}
+							data-label={labelFor(line.n, line.text, line.kind)}
+							aria-pressed="false"
+							aria-label={labelFor(line.n, line.text, line.kind)}
+						>
+							<span class="stb-num" aria-hidden="true">{line.n}</span>
+							<span class="stb-icon" aria-hidden="true" />
+							<code class="stb-text">{line.text === '' ? ' ' : line.text}</code>
+						</button>
+					) : (
+						<div class="stb-line stb-static">
+							<span class="stb-num" aria-hidden="true">{line.n}</span>
+							<span class="stb-icon" aria-hidden="true" />
+							<code class="stb-text">{line.text === '' ? ' ' : line.text}</code>
+						</div>
+					)}
+				</li>
+			))
+		}
+	</ol>
+
+	<div class="stb-actions">
+		<button type="button" class="stb-btn stb-primary" data-action="check">{t.check}</button>
+		<button type="button" class="stb-btn" data-action="reveal">{t.reveal}</button>
+		<button type="button" class="stb-btn" data-action="retry">{t.retry}</button>
+		<p class="stb-progress" data-progress>{format(t.progress, { found: 0, total })}</p>
+	</div>
+
+	<p class="stb-live" role="status" aria-live="polite" aria-atomic="true" data-live></p>
+
+	<div class="stb-explain" data-explain hidden>
+		<h4 class="stb-explain-title">{t.explanations}</h4>
+		<ul class="stb-explain-list" data-explain-list></ul>
+	</div>
+
+	{
+		fix && (
+			<fieldset class="stb-fix" data-fix hidden>
+				<legend>{fix.question}</legend>
+				{fix.options.map((option, index) => (
+					<label class="stb-option">
+						<input type="radio" name={`stb-fix-${slug}`} value={index} />
+						<span>
+							<code>{option}</code>
+						</span>
+					</label>
+				))}
+				<button type="button" class="stb-btn stb-primary" data-action="check-fix">{t.check}</button>
+				<p class="stb-fix-result" data-fix-result role="status" aria-live="polite" />
+			</fieldset>
+		)
+	}
+
+	<script type="application/json" data-config set:html={JSON.stringify(config).replace(/</g, '\\u003c')} />
+</section>
+
+<style>
+	.stb {
+		margin-block: 1.5rem;
+		padding: 1rem 1.1rem 1.1rem;
+		background: var(--pl-surface);
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: var(--pl-radius-md);
+		color: var(--sl-color-text);
+	}
+	.stb-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	.stb-title {
+		margin: 0;
+		font-family: var(--pl-font-display);
+		font-size: var(--sl-text-lg);
+		color: var(--sl-color-white);
+	}
+	.stb-lang {
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+		padding: 0.1rem 0.5rem;
+		border-radius: var(--pl-radius-sm);
+		background: var(--sl-color-bg-inline-code);
+		color: var(--pl-inline-code-ink);
+	}
+	.stb-hint {
+		margin: 0.35rem 0 0.8rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+
+	.stb-code {
+		list-style: none;
+		margin: 0;
+		padding: 0.4rem 0;
+		overflow-x: auto;
+		background: var(--sl-color-bg-inline-code);
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: var(--pl-radius-sm);
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-code);
+		line-height: 1.6;
+	}
+	.stb-row {
+		margin: 0;
+		padding: 0;
+		min-width: max-content;
+	}
+	.stb-line {
+		display: grid;
+		grid-template-columns: 3ch 1.6rem 1fr;
+		align-items: baseline;
+		column-gap: 0.4rem;
+		width: 100%;
+		margin: 0;
+		padding: 0 0.8rem 0 0.6rem;
+		border: 0;
+		border-left: 3px solid transparent;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+	}
+	button.stb-line {
+		cursor: pointer;
+	}
+	button.stb-line:hover {
+		background: var(--pl-surface-hover);
+	}
+	button.stb-line:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: -2px;
+	}
+	.stb-num {
+		text-align: right;
+		color: var(--sl-color-gray-4);
+		user-select: none;
+	}
+	.stb-icon {
+		text-align: center;
+		font-weight: 700;
+	}
+	.stb-text {
+		white-space: pre;
+		background: none;
+		padding: 0;
+		color: inherit;
+		font: inherit;
+	}
+
+	/* Diff: the sign is in the text, the background only reinforces it */
+	.stb-add .stb-line {
+		background: color-mix(in oklch, var(--sl-color-green) 14%, transparent);
+	}
+	.stb-del .stb-line {
+		background: color-mix(in oklch, var(--sl-color-red) 14%, transparent);
+		color: var(--sl-color-gray-3);
+	}
+	.stb-meta .stb-line,
+	.stb-hunk .stb-line {
+		color: var(--sl-color-gray-3);
+	}
+	.stb-hunk .stb-line {
+		background: color-mix(in oklch, var(--pl-teal) 10%, transparent);
+	}
+	.stb-static {
+		cursor: default;
+	}
+
+	/* States: border + icon + (for the screen reader) the accessible name, never colour alone */
+	.stb-line[data-state='selected'] {
+		border-left-color: var(--sl-color-accent);
+		background: var(--sl-color-accent-low);
+	}
+	.stb-line[data-state='selected'] .stb-icon::before {
+		content: '⚑';
+		color: var(--sl-color-accent);
+	}
+	.stb-line[data-state='found'] {
+		border-left-color: var(--pl-teal);
+		background: color-mix(in oklch, var(--pl-teal) 22%, transparent);
+	}
+	.stb-line[data-state='found'] .stb-icon::before {
+		content: '✓';
+		color: var(--pl-teal);
+	}
+	.stb-line[data-state='wrong'] {
+		border-left-color: var(--sl-color-red);
+		background: color-mix(in oklch, var(--sl-color-red) 20%, transparent);
+		text-decoration: underline wavy var(--sl-color-red);
+		text-decoration-thickness: 1px;
+	}
+	.stb-line[data-state='wrong'] .stb-icon::before {
+		content: '✗';
+		color: var(--sl-color-red);
+	}
+	.stb-line[data-state='missed'] {
+		border-left-color: var(--pl-amber);
+		background: color-mix(in oklch, var(--pl-amber) 22%, transparent);
+	}
+	.stb-line[data-state='missed'] .stb-icon::before {
+		content: '!';
+		color: var(--pl-amber);
+	}
+	.stb-line[aria-disabled='true'] {
+		cursor: default;
+	}
+
+	.stb-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+		margin-top: 0.8rem;
+	}
+	.stb-btn {
+		padding: 0.4rem 0.9rem;
+		border: 1px solid var(--sl-color-gray-4);
+		border-radius: var(--pl-radius-sm);
+		background: transparent;
+		color: var(--sl-color-white);
+		font: inherit;
+		font-size: var(--sl-text-sm);
+		cursor: pointer;
+	}
+	.stb-btn:hover {
+		background: var(--pl-surface-hover);
+	}
+	.stb-btn:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 2px;
+	}
+	.stb-primary {
+		border-color: var(--sl-color-accent);
+		background: var(--sl-color-accent-low);
+	}
+	.stb-progress {
+		margin: 0 0 0 auto;
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-text-accent);
+	}
+	.stb-live {
+		min-height: 1.4em;
+		margin: 0.6rem 0 0;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.stb-explain-title {
+		margin: 0.6rem 0 0.3rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+		text-transform: none;
+	}
+	.stb-explain-list {
+		margin: 0;
+		padding-left: 1.2rem;
+		font-size: var(--sl-text-sm);
+	}
+	.stb-explain-list li {
+		margin-block: 0.25rem;
+	}
+	.stb-fix {
+		margin: 1rem 0 0;
+		padding: 0.8rem 1rem;
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: var(--pl-radius-sm);
+	}
+	.stb-fix legend {
+		padding-inline: 0.4rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.stb-option {
+		display: flex;
+		align-items: baseline;
+		gap: 0.55rem;
+		margin-block: 0.4rem;
+		cursor: pointer;
+	}
+	.stb-option input {
+		accent-color: var(--sl-color-accent);
+	}
+	.stb-option input:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 2px;
+	}
+	.stb-fix-result {
+		margin: 0.6rem 0 0;
+		font-size: var(--sl-text-sm);
+	}
+
+	@media (prefers-reduced-motion: no-preference) {
+		.stb-line,
+		.stb-btn {
+			transition:
+				background-color var(--pl-dur-micro) var(--pl-ease-out),
+				border-color var(--pl-dur-micro) var(--pl-ease-out);
+		}
+	}
+</style>
+
+<script>
+	import {
+		bugIndexByLine, checkFix, clearSolved, evaluate, format, missing, progress, readSolved, writeSolved,
+	} from '../scripts/spot-the-bug.mjs';
+
+	const storage = (() => {
+		try {
+			return window.localStorage;
+		} catch {
+			return undefined;
+		}
+	})();
+
+	function init(root: HTMLElement) {
+		const config = JSON.parse(root.querySelector('script[data-config]')!.textContent!);
+		const t = config.strings as Record<string, string>;
+		const bugs = config.bugs as { lines: number[]; why: string }[];
+		const byLine = bugIndexByLine(bugs);
+		const buttons = [...root.querySelectorAll<HTMLButtonElement>('button[data-line]')];
+		const live = root.querySelector<HTMLElement>('[data-live]')!;
+		const progressEl = root.querySelector<HTMLElement>('[data-progress]')!;
+		const explain = root.querySelector<HTMLElement>('[data-explain]')!;
+		const explainList = root.querySelector<HTMLElement>('[data-explain-list]')!;
+		const fixBox = root.querySelector<HTMLFieldSetElement>('[data-fix]');
+		const fixResult = root.querySelector<HTMLElement>('[data-fix-result]');
+
+		type State = 'selected' | 'found' | 'wrong' | 'missed';
+		const states = new Map<number, State>();
+		let found: number[] = [];
+		let revealed = false;
+		let fixDone = false;
+
+		const stateName: Record<State, string> = {
+			selected: t.stateSelected,
+			found: t.stateFound,
+			wrong: t.stateWrong,
+			missed: t.stateMissed,
+		};
+
+		function renderLines() {
+			for (const button of buttons) {
+				const n = Number(button.dataset.line);
+				const state = states.get(n);
+				if (state) button.dataset.state = state;
+				else delete button.dataset.state;
+				button.setAttribute('aria-pressed', String(state === 'selected' || state === 'found' || state === 'wrong' || state === 'missed'));
+				button.setAttribute('aria-label', state ? `${button.dataset.label} (${stateName[state]})` : button.dataset.label!);
+				if (state === 'found' || state === 'missed') button.setAttribute('aria-disabled', 'true');
+				else button.removeAttribute('aria-disabled');
+			}
+		}
+
+		function renderProgress() {
+			const p = progress(found.length, bugs.length);
+			progressEl.textContent = format(t.progress, { found: p.found, total: p.total });
+		}
+
+		function renderExplanations() {
+			explainList.replaceChildren();
+			const entries: { n: number; ok: boolean; text: string }[] = [];
+			for (const [n, state] of states) {
+				if (state === 'found' || state === 'missed') {
+					entries.push({ n, ok: state === 'found', text: bugs[byLine.get(n)!].why });
+				} else if (state === 'wrong') {
+					entries.push({ n, ok: false, text: t.notABug });
+				}
+			}
+			entries.sort((a, b) => a.n - b.n);
+			for (const entry of entries) {
+				const li = document.createElement('li');
+				const strong = document.createElement('strong');
+				strong.textContent = `${format(t.line, { n: entry.n })} — ${entry.ok ? '✓ ' + t.correct : '✗ ' + t.incorrect}. `;
+				li.append(strong, document.createTextNode(entry.text));
+				explainList.append(li);
+			}
+			explain.hidden = entries.length === 0;
+		}
+
+		function renderFix() {
+			if (!fixBox) return;
+			const open = !!config.fix && (found.length === bugs.length || revealed);
+			fixBox.hidden = !open;
+		}
+
+		function render() {
+			renderLines();
+			renderProgress();
+			renderExplanations();
+			renderFix();
+		}
+
+		function announce(message: string) {
+			live.textContent = '';
+			// A tick later so the same message is announced again
+			window.setTimeout(() => (live.textContent = message), 30);
+		}
+
+		function markSolved() {
+			writeSolved(storage, config.key);
+		}
+
+		function maybeSolved() {
+			if (found.length === bugs.length && (!config.fix || fixDone)) markSolved();
+		}
+
+		function check() {
+			const selected = [...states].filter(([, s]) => s === 'selected' || s === 'wrong').map(([n]) => n);
+			if (selected.length === 0) {
+				announce(t.nothingSelected);
+				return;
+			}
+			const result = evaluate(selected, bugs, found);
+			const messages: string[] = [];
+			for (const index of result.newlyFound) {
+				const hit = bugs[index].lines.find((n) => selected.includes(n))!;
+				for (const n of bugs[index].lines) if (n !== hit && states.get(n) === 'selected') states.delete(n);
+				states.set(hit, 'found');
+				messages.push(`${format(t.line, { n: hit })} : ${t.correct}. ${bugs[index].why}`);
+			}
+			found = result.found;
+			for (const n of result.wrong) {
+				states.set(n, 'wrong');
+				messages.push(`${format(t.line, { n })} : ${t.notABug}`);
+			}
+			for (const n of selected) if (states.get(n) === 'selected') states.delete(n);
+			render();
+			const p = progress(found.length, bugs.length);
+			messages.push(format(t.progress, { found: p.found, total: p.total }) + (p.complete ? ` ${t.allFound}` : ''));
+			announce(messages.join(' '));
+			if (p.complete) maybeSolved();
+		}
+
+		function reveal() {
+			revealed = true;
+			for (const index of missing(bugs, found)) {
+				for (const n of bugs[index].lines) {
+					if (buttons.some((b) => Number(b.dataset.line) === n)) states.set(n, 'missed');
+				}
+			}
+			for (const [n, s] of [...states]) if (s === 'wrong' || s === 'selected') states.delete(n);
+			render();
+			announce(t.revealed);
+		}
+
+		function retry() {
+			states.clear();
+			found = [];
+			revealed = false;
+			fixDone = false;
+			clearSolved(storage, config.key);
+			for (const input of root.querySelectorAll<HTMLInputElement>('input[type=radio]')) input.checked = false;
+			if (fixResult) fixResult.textContent = '';
+			render();
+			announce(t.reset);
+		}
+
+		function checkChoice() {
+			const picked = root.querySelector<HTMLInputElement>('input[type=radio]:checked');
+			if (!picked) {
+				fixResult!.textContent = t.fixPick;
+				return;
+			}
+			const ok = checkFix(config.fix, Number(picked.value));
+			fixDone = ok;
+			fixResult!.textContent = ok ? `✓ ${t.fixGood} ${config.fix.why}` : `✗ ${t.fixBad}`;
+			if (ok) maybeSolved();
+		}
+
+		for (const button of buttons) {
+			button.addEventListener('click', () => {
+				const n = Number(button.dataset.line);
+				const state = states.get(n);
+				if (state === 'found' || state === 'missed') return;
+				if (state) states.delete(n);
+				else states.set(n, 'selected');
+				renderLines();
+			});
+		}
+		root.querySelector('[data-action=check]')!.addEventListener('click', check);
+		root.querySelector('[data-action=reveal]')!.addEventListener('click', reveal);
+		root.querySelector('[data-action=retry]')!.addEventListener('click', retry);
+		root.querySelector('[data-action=check-fix]')?.addEventListener('click', checkChoice);
+
+		// Solved on an earlier visit: show the solution state, keep the exercise replayable
+		if (readSolved(storage, config.key)) {
+			found = bugs.map((_, index) => index);
+			for (const bug of bugs) {
+				const n = bug.lines.find((line) => buttons.some((b) => Number(b.dataset.line) === line)) ?? bug.lines[0];
+				states.set(n, 'found');
+			}
+			fixDone = true;
+			render();
+			live.textContent = t.solvedBefore;
+		} else {
+			render();
+		}
+	}
+
+	for (const root of document.querySelectorAll<HTMLElement>('[data-spot-the-bug]')) init(root);
+</script>
