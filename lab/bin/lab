@@ -7,11 +7,16 @@
 #   lab reset  <NN>      put exercise NN back to its starting point
 #   lab solve  <NN>      copy the solution of exercise NN (spoiler)
 #   lab verify <NN>      maintainers: the starter must fail, the solution must pass
+#   lab capture <id>     record a scripted session as a TerminalReplay fixture (site/src/data/captures)
+#   lab capture --check [id]   re-record and fail if the output drifted from the committed fixture
 set -euo pipefail
 
 LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT_DIR="$LAB_DIR/academy-lab"
+# Physical path: DDEV refuses a project reached through a symlink
+PROJECT_DIR="$(cd -P "$LAB_DIR/academy-lab" 2>/dev/null && pwd -P || echo "$LAB_DIR/academy-lab")"
 POLLORA_CONSTRAINT='^13.40'
+CAPTURES_DIR="$LAB_DIR/captures"
+FIXTURES_DIR="$(cd "$LAB_DIR/.." && pwd)/site/src/data/captures"
 
 die() { echo "lab: $*" >&2; exit 1; }
 
@@ -87,11 +92,108 @@ cmd_verify() {
   echo "Exercise $number: the starter fails, the solution passes."
 }
 
+# The line to run in the project for a step of a capture: `pollora <name> …` is relayed by the Pollora CLI
+# to `php artisan pollora:<name> …`, any other command (`php artisan …`) is run as written.
+capture_command_line() {
+  local command="$1"
+  case "$command" in
+    "pollora "*) echo "php artisan pollora:${command#pollora } --ansi" ;;
+    "php artisan "*) echo "$command --ansi" ;;
+    *) die "capture: a step must start with 'pollora ' or 'php artisan ': $command" ;;
+  esac
+}
+
+# Record one capture into <output file>. The project is put aside (isolate) and back (teardown) whatever happens.
+record_capture() {
+  local id="$1" output="$2"
+  local definition="$CAPTURES_DIR/$id.json"
+  [[ -f "$definition" ]] || die "no capture $id (expected lab/captures/$id.json)"
+  command -v jq >/dev/null || die "jq is required to read lab/captures/$id.json"
+  command -v node >/dev/null || die "Node is required to write the fixture"
+  require_project
+  in_project ddev start >/dev/null 2>&1 || die "ddev could not start the project"
+
+  local work stash; work="$(mktemp -d)"; stash="$work/stash"; mkdir -p "$stash" "$work/raw"
+  local isolated=() path index=0
+
+  restore_project() {
+    jq -r '.teardown[]?' "$definition" | while IFS= read -r line; do
+      in_project ddev exec bash -c "$line" </dev/null >/dev/null 2>&1 || true
+    done
+    local i=0
+    for path in "${isolated[@]:-}"; do
+      [[ -n "$path" ]] || continue
+      rm -rf "${PROJECT_DIR:?}/$path"
+      mv "$stash/$i" "$PROJECT_DIR/$path"
+      i=$((i + 1))
+    done
+    isolated=()
+    in_project ddev exec php artisan discovery:clear >/dev/null 2>&1 || true
+    rm -rf "$work"
+  }
+  trap restore_project EXIT
+
+  # Exercise files left in the project would end up in the output: put them aside for the recording
+  while IFS= read -r path; do
+    [[ -n "$path" && -e "$PROJECT_DIR/$path" ]] || continue
+    mv "$PROJECT_DIR/$path" "$stash/$index"
+    isolated+=("$path"); index=$((index + 1))
+  done < <(jq -r '.isolate[]?' "$definition")
+
+  in_project ddev exec php artisan discovery:clear >/dev/null 2>&1
+  while IFS= read -r line; do
+    in_project ddev exec bash -c "$line" </dev/null >/dev/null 2>&1 || die "capture $id: setup failed: $line"
+  done < <(jq -r '.setup[]?' "$definition")
+
+  local step=0 command line code
+  while IFS= read -r command; do
+    line="$(capture_command_line "$command")"
+    code=0
+    in_project ddev exec bash -c "$line 2>&1" </dev/null > "$work/raw/$step.out" 2>/dev/null || code=$?
+    echo "$code" > "$work/raw/$step.code"
+    step=$((step + 1))
+  done < <(jq -r '.steps[].command' "$definition")
+
+  local version
+  version="$(in_project ddev composer show pollora/framework 2>/dev/null | sed -n 's/^versions *: *\*\? *v\?\([0-9][0-9.]*\).*/\1/p' | head -1)"
+  [[ -n "$version" ]] || version="unknown"
+  node "$LAB_DIR/support/capture.mjs" build "$definition" "$work/raw" "$output" "$version"
+
+  restore_project
+  trap - EXIT
+}
+
+cmd_capture() {
+  mkdir -p "$FIXTURES_DIR"
+  if [[ "${1:-}" == "--check" ]]; then
+    local ids=() failed=0 id
+    if [[ -n "${2:-}" ]]; then ids=("$2"); else for f in "$CAPTURES_DIR"/*.json; do ids+=("$(basename "$f" .json)"); done; fi
+    local tmp; tmp="$(mktemp -d)"
+    for id in "${ids[@]}"; do
+      [[ -f "$FIXTURES_DIR/$id.json" ]] || { echo "capture $id: no committed fixture, run: lab capture $id" >&2; failed=1; continue; }
+      record_capture "$id" "$tmp/$id.json"
+      if node "$LAB_DIR/support/capture.mjs" diff "$FIXTURES_DIR/$id.json" "$tmp/$id.json"; then
+        echo "capture $id: up to date"
+      else
+        failed=1
+      fi
+    done
+    rm -rf "$tmp"
+    [[ "$failed" -eq 0 ]] || die "captures drifted: review the change, then re-record with 'lab capture <id>'"
+    return 0
+  fi
+  local id="${1:-}"
+  [[ "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "give the capture id, for example: lab capture doctor"
+  record_capture "$id" "$FIXTURES_DIR/$id.json"
+  echo "Recorded site/src/data/captures/$id.json"
+}
+
 case "${1:-}" in
   setup)  cmd_setup ;;
   check)  cmd_check "${2:-}" ;;
   reset)  cmd_reset "${2:-}" ;;
   solve)  cmd_solve "${2:-}" ;;
   verify) cmd_verify "${2:-}" ;;
-  *) sed -n "2,9p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  capture) shift; cmd_capture "${1:-}" "${2:-}" ;;
+  *) sed -n "2,11p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

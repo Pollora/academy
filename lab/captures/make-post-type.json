@@ -1,0 +1,26 @@
+{
+  "id": "make-post-type",
+  "title": "pollora make:post-type Lesson, then pollora status, on a freshly installed lab project (Pollora 13.40, no exercise file)",
+  "isolate": [
+    "app/Cms/Bindings",
+    "app/Cms/Hooks",
+    "app/Cms/Roles",
+    "app/Cms/PostTypes/Event.php",
+    "app/Http/Controllers/ContactController.php"
+  ],
+  "steps": [
+    {
+      "command": "pollora make:post-type Lesson",
+      "accept": ["php artisan pollora:make:post-type Lesson"],
+      "hint": "The generator is `pollora make:post-type`, followed by the class name."
+    },
+    {
+      "command": "pollora status",
+      "accept": ["php artisan pollora:status"],
+      "hint": "Discovery found the new class on its own: check with `pollora status`."
+    }
+  ],
+  "teardown": [
+    "rm -f app/Cms/PostTypes/Lesson.php"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+	"id": "doctor",
+	"title": "pollora doctor on a freshly installed lab project (Pollora 13.40, no exercise file, no plugin)",
+	"recordedWith": {
+		"pollora": "13.40.0",
+		"date": "2026-11-06"
+	},
+	"steps": [
+		{
+			"command": "pollora doctor",
+			"accept": [
+				"php artisan pollora:doctor"
+			],
+			"output": "\n  \u001b[32m✓\u001b[39m \u001b[1mWordPress core patch\u001b[22m — The core is patched, and __() is Pollora's.\n  \u001b[32m✓\u001b[39m \u001b[1mComposer patches lock\u001b[22m — patches.lock.json lists every patch the framework declares.\n  \u001b[32m✓\u001b[39m \u001b[1mEnvironment file\u001b[22m — .env uses the names Pollora reads.\n  \u001b[32m✓\u001b[39m \u001b[1mApplication URL\u001b[22m — APP_URL names a scheme.\n  \u001b[32m✓\u001b[39m \u001b[1mConfiguration and route caches\u001b[22m — Nothing freezes the configuration or the routes.\n  \u001b[32m✓\u001b[39m \u001b[1mDiscovery cache\u001b[22m — The cache is off (debug mode): discovery reads the disk on every request.\n  \u001b[32m✓\u001b[39m \u001b[1mTheme, plugin and module builds\u001b[22m — 1 Vite build(s) where Pollora reads them.\n  \u001b[32m✓\u001b[39m \u001b[1mSymlinked theme, plugin and module directories\u001b[22m — No directory is a symlink under another name.\n  \u001b[32m✓\u001b[39m \u001b[1mTemplate placeholders\u001b[22m — No template placeholder left.\n  \u001b[32m✓\u001b[39m \u001b[1mTheme pattern files\u001b[22m — The theme has no patterns/ directory.\n  \u001b[32m✓\u001b[39m \u001b[1mTheme pattern cache\u001b[22m — The theme has no pattern files.\n  \u001b[90m–\u001b[39m \u001b[1mRoutes over block templates\u001b[22m — The active theme is not a block theme.\n  \u001b[32m✓\u001b[39m \u001b[1mBlocks in the legacy folder\u001b[22m — Every block is in resources/views/blocks.\n  \u001b[90m–\u001b[39m \u001b[1mWooCommerce integration\u001b[22m — WooCommerce is not active.\n  \u001b[90m–\u001b[39m \u001b[1mWP Rocket integration\u001b[22m — WP Rocket is not active.\n  \u001b[32m✓\u001b[39m \u001b[1mModule activation\u001b[22m — Module states come from modules_statuses.json and apply on the next request.\n  \u001b[32m✓\u001b[39m \u001b[1mTyped meta\u001b[22m — No #[Meta] declared.\n  \u001b[32m✓\u001b[39m \u001b[1mRoles\u001b[22m — 5 role(s); every role users carry exists.\n  \u001b[90m–\u001b[39m \u001b[1mMedia storage\u001b[22m — media.disk is not set: WordPress keeps its uploads folder.\n  \u001b[32m✓\u001b[39m \u001b[1mBlock bindings\u001b[22m — No block binding in the templates, parts and patterns.\n  \u001b[32m✓\u001b[39m \u001b[1mAsynchronous actions\u001b[22m — No asynchronous action registered.\n  \u001b[32m✓\u001b[39m \u001b[1mScheduled events\u001b[22m — Scheduled events are kept by \"wp-cron\".\n\n  0 error(s), 0 warning(s).\n  \u001b[90mChecks that only a web request can make run in Tools › Site Health, in wp-admin.\u001b[39m",
+			"exitCode": 0,
+			"hint": "The Pollora CLI relays `pollora doctor` to `php artisan pollora:doctor`."
+		}
+	]
+}

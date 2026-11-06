@@ -1,0 +1,520 @@
+---
+/**
+ * A fake terminal: the learner types a command, presses Enter, and the output that REALLY came from the lab
+ * project is printed. Nothing is executed, the outputs are fixtures recorded by `lab/bin/lab capture <id>`
+ * (see src/data/captures.mjs for the format).
+ *
+ *   <TerminalReplay capture="doctor" />                     all the steps of a capture, in order
+ *   <TerminalReplay capture="make-post-type" steps={[0]} />   only these steps (indexes), in this order
+ *
+ * The page script is processed by Astro and emitted as a file (the CSP allows 'self' only).
+ */
+import { getCapture } from '../data/captures.mjs';
+
+interface Props {
+	capture: string;
+	steps?: number[];
+}
+
+const { capture: captureId, steps: stepIndexes } = Astro.props;
+const capture = getCapture(captureId, stepIndexes);
+const locale = Astro.currentLocale === 'en' ? 'en' : 'fr';
+
+const strings = {
+	fr: {
+		region: 'Terminal simulé',
+		recorded: (version: string) => `Sortie réelle enregistrée avec Pollora ${version}`,
+		label: (n: number, total: number) => `Commande ${n} sur ${total} : tapez-la puis appuyez sur Entrée`,
+		run: 'Exécuter',
+		hint: 'Indice',
+		show: 'Montre-moi',
+		reset: 'Recommencer',
+		placeholder: 'Tapez la commande',
+		wrong: 'Ce n’est pas la commande attendue. Essayez encore, ou demandez un indice.',
+		expected: 'Forme attendue :',
+		hintStart: (word: string) => `La commande commence par « ${word} ».`,
+		exit: (code: number) => `(code de sortie ${code})`,
+		done: 'Terminé : toutes les commandes de cette séance ont été jouées.',
+		typed: 'Commande saisie pour vous : appuyez sur Entrée.',
+	},
+	en: {
+		region: 'Simulated terminal',
+		recorded: (version: string) => `Real output recorded with Pollora ${version}`,
+		label: (n: number, total: number) => `Command ${n} of ${total}: type it, then press Enter`,
+		run: 'Run',
+		hint: 'Hint',
+		show: 'Show me',
+		reset: 'Start over',
+		placeholder: 'Type the command',
+		wrong: 'That is not the expected command. Try again, or ask for a hint.',
+		expected: 'Expected form:',
+		hintStart: (word: string) => `The command starts with “${word}”.`,
+		exit: (code: number) => `(exit code ${code})`,
+		done: 'Done: every command of this session has been run.',
+		typed: 'Command typed for you: press Enter.',
+	},
+}[locale];
+
+// Closures cannot cross to the client: the script gets plain strings
+const ui = {
+	locale,
+	label: Array.from({ length: capture.steps.length }, (_, i) => strings.label(i + 1, capture.steps.length)),
+	hintStart: capture.steps.map((step) => strings.hintStart(step.command.trim().split(/\s+/)[0] ?? '')),
+	exit: Object.fromEntries([...new Set(capture.steps.map((step) => step.exitCode).filter((code) => code !== 0))].map((code) => [code, strings.exit(code)])),
+	wrong: strings.wrong,
+	expected: strings.expected,
+	done: strings.done,
+	typed: strings.typed,
+};
+const data = {
+	steps: capture.steps.map(({ command, accept, output, exitCode, hint }) => ({ command, accept, output, exitCode, hint })),
+	ui,
+};
+
+const uid = `terminal-replay-${captureId}-${(stepIndexes ?? ['all']).join('-')}`;
+---
+
+<section class="terminal-replay not-content" data-terminal-replay aria-labelledby={`${uid}-title`}>
+	<div class="tr-bar">
+		<span class="tr-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+		<span class="tr-title" id={`${uid}-title`}>{strings.region} · <span class="tr-version">{strings.recorded(capture.recordedWith.pollora)}</span></span>
+	</div>
+
+	<div class="tr-log" role="log" aria-live="polite" aria-relevant="additions" aria-label={strings.region} tabindex="0" data-log></div>
+
+	<form class="tr-form" data-form autocomplete="off">
+		<label class="tr-label" for={`${uid}-input`} data-label>{ui.label[0]}</label>
+		<div class="tr-row">
+			<span class="tr-prompt" aria-hidden="true">$</span>
+			<input
+				class="tr-input"
+				id={`${uid}-input`}
+				type="text"
+				name="command"
+				data-input
+				placeholder={strings.placeholder}
+				autocapitalize="off"
+				autocorrect="off"
+				spellcheck="false"
+				enterkeyhint="go"
+			/>
+			<button class="tr-btn tr-btn-primary" type="submit" data-run>{strings.run}</button>
+		</div>
+		<div class="tr-actions">
+			<button class="tr-btn" type="button" data-hint>{strings.hint}</button>
+			<button class="tr-btn" type="button" data-show>{strings.show}</button>
+			<button class="tr-btn" type="button" data-reset>{strings.reset}</button>
+		</div>
+	</form>
+
+	<script type="application/json" data-capture set:html={JSON.stringify(data).replace(/</g, '\\u003c')} />
+</section>
+
+<style>
+	/* The frame stays dark in light mode too, like the code blocks */
+	.terminal-replay {
+		--tr-bg: oklch(21.5% 0.035 293);
+		--tr-bar: oklch(26% 0.04 293);
+		--tr-line: oklch(33% 0.04 295);
+		--tr-ink: oklch(90% 0.012 295);
+		--tr-muted: oklch(68% 0.02 295);
+		--tr-accent: var(--sl-color-accent, oklch(68% 0.2 32));
+		--tr-c0: oklch(30% 0.03 295);
+		--tr-c1: oklch(66% 0.2 22);
+		--tr-c2: oklch(78% 0.17 150);
+		--tr-c3: oklch(83% 0.15 85);
+		--tr-c4: oklch(72% 0.14 250);
+		--tr-c5: oklch(72% 0.18 335);
+		--tr-c6: var(--pl-teal, #49c7b9);
+		--tr-c7: oklch(94% 0.008 295);
+		--tr-c8: oklch(62% 0.02 295);
+		--tr-c9: oklch(72% 0.2 22);
+		--tr-c10: oklch(84% 0.18 150);
+		--tr-c11: oklch(88% 0.15 90);
+		--tr-c12: oklch(80% 0.12 250);
+		--tr-c13: oklch(80% 0.16 335);
+		--tr-c14: oklch(86% 0.1 185);
+		--tr-c15: oklch(98% 0.004 295);
+		margin-block: 1.5rem;
+		border: 1px solid var(--tr-line);
+		border-radius: var(--pl-radius-md, 10px);
+		background: var(--tr-bg);
+		color: var(--tr-ink);
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-code, 0.84rem);
+		overflow: hidden;
+	}
+	.tr-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-height: var(--pl-titlebar-h, 2.25rem);
+		padding-inline: 0.75rem;
+		background: var(--tr-bar);
+		border-bottom: 1px solid var(--tr-line);
+		color: var(--tr-muted);
+		font-size: 0.78em;
+	}
+	.tr-dots {
+		display: inline-flex;
+		gap: 0.35rem;
+	}
+	.tr-dots i {
+		width: 0.6rem;
+		height: 0.6rem;
+		border-radius: 50%;
+		background: var(--tr-c8);
+		opacity: 0.55;
+	}
+	.tr-log {
+		min-height: 5rem;
+		max-height: 26rem;
+		overflow: auto;
+		padding: 0.9rem 1rem;
+		line-height: 1.55;
+		scrollbar-color: var(--tr-line) transparent;
+	}
+	.tr-log:focus-visible,
+	.tr-input:focus-visible,
+	.tr-btn:focus-visible {
+		outline: 2px solid var(--tr-accent);
+		outline-offset: 2px;
+	}
+	/* Children are created by the page script: :global scopes them to this component's log */
+	.tr-log :global(.tr-line) {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		min-height: 1.55em;
+	}
+	.tr-log :global(.tr-cmd) {
+		margin-top: 0.5rem;
+	}
+	.tr-log :global(.tr-cmd:first-child) {
+		margin-top: 0;
+	}
+	.tr-log :global(.tr-cmd::before) {
+		content: '$ ';
+		color: var(--tr-accent);
+	}
+	.tr-log :global(.tr-note) {
+		color: var(--tr-c3);
+	}
+	.tr-log :global(.tr-meta) {
+		color: var(--tr-muted);
+	}
+	.tr-log :global(.tr-done) {
+		margin-top: 0.5rem;
+		color: var(--tr-c10);
+	}
+	.tr-log :global(code) {
+		background: none;
+		color: inherit;
+		padding: 0;
+		font-weight: 700;
+	}
+	.tr-log :global(.tr-bold) { font-weight: 700; }
+	.tr-log :global(.tr-dim) { opacity: 0.7; }
+	.tr-log :global(.tr-italic) { font-style: italic; }
+	.tr-log :global(.tr-underline) { text-decoration: underline; }
+	.tr-form {
+		display: grid;
+		gap: 0.5rem;
+		padding: 0.75rem 1rem 0.9rem;
+		border-top: 1px solid var(--tr-line);
+	}
+	.tr-label {
+		color: var(--tr-muted);
+		font-size: 0.78em;
+	}
+	.tr-row {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+	.tr-prompt {
+		color: var(--tr-accent);
+	}
+	.tr-input {
+		flex: 1;
+		min-width: 0;
+		padding: 0.45rem 0.6rem;
+		border: 1px solid var(--tr-line);
+		border-radius: var(--pl-radius-sm, 6px);
+		background: oklch(17% 0.03 293);
+		color: var(--tr-ink);
+		font: inherit;
+	}
+	.tr-input::placeholder {
+		color: var(--tr-muted);
+		opacity: 0.8;
+	}
+	.tr-input:disabled {
+		opacity: 0.5;
+	}
+	.tr-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+	.tr-btn {
+		padding: 0.35rem 0.8rem;
+		border: 1px solid var(--tr-line);
+		border-radius: var(--pl-radius-sm, 6px);
+		background: transparent;
+		color: var(--tr-ink);
+		font: inherit;
+		font-size: 0.85em;
+		cursor: pointer;
+		transition: background-color var(--pl-dur-micro, 120ms) var(--pl-ease-out, ease-out);
+	}
+	.tr-btn:hover:not(:disabled) {
+		background: var(--tr-bar);
+	}
+	.tr-btn:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+	.tr-btn-primary {
+		border-color: var(--tr-accent);
+		color: var(--tr-accent);
+	}
+	/* Colours of ANSI output (0-7 normal, 8-15 bright) */
+	.tr-log :global([class*='tr-fg-']) { color: var(--tr-fg); }
+	.tr-log :global([class*='tr-bg-']) { background: var(--tr-bgc); }
+	.tr-log :global(.tr-fg-0) { --tr-fg: var(--tr-c0); }
+	.tr-log :global(.tr-fg-1) { --tr-fg: var(--tr-c1); }
+	.tr-log :global(.tr-fg-2) { --tr-fg: var(--tr-c2); }
+	.tr-log :global(.tr-fg-3) { --tr-fg: var(--tr-c3); }
+	.tr-log :global(.tr-fg-4) { --tr-fg: var(--tr-c4); }
+	.tr-log :global(.tr-fg-5) { --tr-fg: var(--tr-c5); }
+	.tr-log :global(.tr-fg-6) { --tr-fg: var(--tr-c6); }
+	.tr-log :global(.tr-fg-7) { --tr-fg: var(--tr-c7); }
+	.tr-log :global(.tr-fg-8) { --tr-fg: var(--tr-c8); }
+	.tr-log :global(.tr-fg-9) { --tr-fg: var(--tr-c9); }
+	.tr-log :global(.tr-fg-10) { --tr-fg: var(--tr-c10); }
+	.tr-log :global(.tr-fg-11) { --tr-fg: var(--tr-c11); }
+	.tr-log :global(.tr-fg-12) { --tr-fg: var(--tr-c12); }
+	.tr-log :global(.tr-fg-13) { --tr-fg: var(--tr-c13); }
+	.tr-log :global(.tr-fg-14) { --tr-fg: var(--tr-c14); }
+	.tr-log :global(.tr-fg-15) { --tr-fg: var(--tr-c15); }
+	.tr-log :global(.tr-bg-0) { --tr-bgc: var(--tr-c0); }
+	.tr-log :global(.tr-bg-1) { --tr-bgc: oklch(48% 0.19 22); }
+	.tr-log :global(.tr-bg-2) { --tr-bgc: oklch(52% 0.14 150); }
+	.tr-log :global(.tr-bg-3) { --tr-bgc: oklch(62% 0.13 85); }
+	.tr-log :global(.tr-bg-4) { --tr-bgc: oklch(48% 0.13 250); }
+	.tr-log :global(.tr-bg-5) { --tr-bgc: oklch(50% 0.17 335); }
+	.tr-log :global(.tr-bg-6) { --tr-bgc: oklch(55% 0.09 185); }
+	.tr-log :global(.tr-bg-7) { --tr-bgc: var(--tr-c7); }
+	.tr-log :global(.tr-bg-8) { --tr-bgc: var(--tr-c8); }
+	.tr-log :global(.tr-bg-9) { --tr-bgc: var(--tr-c9); }
+	.tr-log :global(.tr-bg-10) { --tr-bgc: var(--tr-c10); }
+	.tr-log :global(.tr-bg-11) { --tr-bgc: var(--tr-c11); }
+	.tr-log :global(.tr-bg-12) { --tr-bgc: var(--tr-c12); }
+	.tr-log :global(.tr-bg-13) { --tr-bgc: var(--tr-c13); }
+	.tr-log :global(.tr-bg-14) { --tr-bgc: var(--tr-c14); }
+	.tr-log :global(.tr-bg-15) { --tr-bgc: var(--tr-c15); }
+	/* Text on a filled background needs a dark ink to stay readable */
+	.tr-log :global([class*='tr-bg-']) { --tr-fg: oklch(98% 0.004 295); }
+	.tr-log :global(.tr-bg-3), .tr-log :global(.tr-bg-7), .tr-log :global(.tr-bg-10), .tr-log :global(.tr-bg-11), .tr-log :global(.tr-bg-14), .tr-log :global(.tr-bg-15) { --tr-fg: oklch(20% 0.03 293); }
+	@media (max-width: 30rem) {
+		.tr-title .tr-version {
+			display: none;
+		}
+	}
+</style>
+
+<script>
+	import { matchesStep, parseAnsi } from '../scripts/terminal-replay.mjs';
+
+	const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const LINE_DELAY_MS = 28;
+	const MAX_PRINT_MS = 1400;
+	const TYPE_DELAY_MS = 40;
+
+	function setup(root: HTMLElement) {
+		const { steps, ui } = JSON.parse(root.querySelector('script[data-capture]')!.textContent ?? '{}');
+		const log = root.querySelector<HTMLElement>('[data-log]')!;
+		const form = root.querySelector<HTMLFormElement>('[data-form]')!;
+		const input = root.querySelector<HTMLInputElement>('[data-input]')!;
+		const label = root.querySelector<HTMLElement>('[data-label]')!;
+		const run = root.querySelector<HTMLButtonElement>('[data-run]')!;
+		const hintButton = root.querySelector<HTMLButtonElement>('[data-hint]')!;
+		const showButton = root.querySelector<HTMLButtonElement>('[data-show]')!;
+		const resetButton = root.querySelector<HTMLButtonElement>('[data-reset]')!;
+
+		let index = 0;
+		let failures = 0;
+		let busy = false;
+		let timers: number[] = [];
+
+		const later = (fn: () => void, ms: number) => {
+			timers.push(window.setTimeout(fn, ms));
+		};
+		const clearTimers = () => {
+			timers.forEach((timer) => window.clearTimeout(timer));
+			timers = [];
+		};
+		const scroll = () => {
+			log.scrollTop = log.scrollHeight;
+		};
+		const line = (className: string, text = '') => {
+			const element = document.createElement('div');
+			element.className = `tr-line ${className}`.trim();
+			if (text) element.textContent = text;
+			log.append(element);
+			return element;
+		};
+		const finished = () => index >= steps.length;
+		const setControls = () => {
+			const locked = busy || finished();
+			input.disabled = locked;
+			run.disabled = locked;
+			hintButton.disabled = locked;
+			showButton.disabled = locked;
+			if (!finished()) label.textContent = ui.label[index];
+			log.setAttribute('aria-busy', String(busy));
+		};
+
+		/** Output lines of a step as DOM, ANSI turned into styled spans (textContent only: no HTML from the fixture). */
+		const outputLines = (step: { output: string; exitCode: number }) => {
+			const rows = parseAnsi(step.output).map((segments) => {
+				const row = document.createElement('div');
+				row.className = 'tr-line';
+				for (const { text, className } of segments) {
+					const span = document.createElement('span');
+					if (className) span.className = className;
+					span.textContent = text;
+					row.append(span);
+				}
+				return row;
+			});
+			if (step.exitCode !== 0) {
+				const row = document.createElement('div');
+				row.className = 'tr-line tr-meta';
+				row.textContent = ui.exit[step.exitCode] ?? '';
+				rows.push(row);
+			}
+			return rows;
+		};
+
+		const afterOutput = () => {
+			busy = false;
+			index++;
+			failures = 0;
+			if (finished()) {
+				line('tr-done', ui.done);
+				setControls();
+				resetButton.focus();
+			} else {
+				setControls();
+				input.focus();
+			}
+			scroll();
+		};
+
+		const print = (step: { output: string; exitCode: number }) => {
+			const rows = outputLines(step);
+			busy = true;
+			setControls();
+			if (reducedMotion() || rows.length < 2) {
+				log.append(...rows);
+				afterOutput();
+				return;
+			}
+			const delay = Math.min(LINE_DELAY_MS, MAX_PRINT_MS / rows.length);
+			rows.forEach((row, position) => {
+				later(() => {
+					log.append(row);
+					scroll();
+					if (position === rows.length - 1) afterOutput();
+				}, delay * (position + 1));
+			});
+		};
+
+		const note = (className: string, text: string, code?: string) => {
+			const element = line(className, text);
+			if (code) {
+				element.append(' ');
+				const tag = document.createElement('code');
+				tag.textContent = code;
+				element.append(tag);
+			}
+			scroll();
+		};
+
+		form.addEventListener('submit', (event) => {
+			event.preventDefault();
+			if (busy || finished()) return;
+			const typed = input.value;
+			if (typed.trim() === '') {
+				input.focus();
+				return;
+			}
+			clearTimers();
+			line('tr-cmd', typed.trim().replace(/\s+/g, ' '));
+			input.value = '';
+			const step = steps[index];
+			if (matchesStep(typed, step)) {
+				print(step);
+				return;
+			}
+			failures++;
+			note('tr-note', ui.wrong);
+			if (failures >= 2) note('tr-note', ui.expected, step.command);
+			input.focus();
+		});
+
+		hintButton.addEventListener('click', () => {
+			if (finished()) return;
+			const step = steps[index];
+			note('tr-note', step.hint || ui.hintStart[index]);
+			input.focus();
+		});
+
+		showButton.addEventListener('click', () => {
+			if (busy || finished()) return;
+			clearTimers();
+			const command: string = steps[index].command;
+			input.focus();
+			if (reducedMotion()) {
+				input.value = command;
+				note('tr-meta', ui.typed);
+				return;
+			}
+			input.value = '';
+			showButton.disabled = true;
+			[...command].forEach((_, position) => {
+				later(() => {
+					input.value = command.slice(0, position + 1);
+					if (position === command.length - 1) {
+						showButton.disabled = false;
+						note('tr-meta', ui.typed);
+					}
+				}, TYPE_DELAY_MS * (position + 1));
+			});
+		});
+
+		// Typing by hand cancels a "Show me" in progress
+		input.addEventListener('keydown', (event) => {
+			if (event.key.length === 1 || event.key === 'Backspace') {
+				clearTimers();
+				showButton.disabled = busy || finished();
+			}
+		});
+
+		resetButton.addEventListener('click', () => {
+			clearTimers();
+			log.replaceChildren();
+			index = 0;
+			failures = 0;
+			busy = false;
+			input.value = '';
+			setControls();
+			input.focus();
+		});
+
+		setControls();
+	}
+
+	document.querySelectorAll<HTMLElement>('[data-terminal-replay]').forEach(setup);
+</script>

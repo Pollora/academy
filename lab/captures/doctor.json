@@ -1,0 +1,18 @@
+{
+  "id": "doctor",
+  "title": "pollora doctor on a freshly installed lab project (Pollora 13.40, no exercise file, no plugin)",
+  "isolate": [
+    "app/Cms/Bindings",
+    "app/Cms/Hooks",
+    "app/Cms/Roles",
+    "app/Cms/PostTypes/Event.php",
+    "app/Http/Controllers/ContactController.php"
+  ],
+  "steps": [
+    {
+      "command": "pollora doctor",
+      "accept": ["php artisan pollora:doctor"],
+      "hint": "The Pollora CLI relays `pollora doctor` to `php artisan pollora:doctor`."
+    }
+  ]
+}

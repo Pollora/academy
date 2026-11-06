@@ -1,0 +1,28 @@
+{
+	"id": "make-post-type",
+	"title": "pollora make:post-type Lesson, then pollora status, on a freshly installed lab project (Pollora 13.40, no exercise file)",
+	"recordedWith": {
+		"pollora": "13.40.0",
+		"date": "2026-11-06"
+	},
+	"steps": [
+		{
+			"command": "pollora make:post-type Lesson",
+			"accept": [
+				"php artisan pollora:make:post-type Lesson"
+			],
+			"output": "\u001b[32mCreating PostType in app: ~/project/app\u001b[39m\n\n  \u001b[37;42m SUCCESS \u001b[39;49m PostType \u001b[1m[app/Cms/PostTypes/Lesson.php]\u001b[22m created successfully.",
+			"exitCode": 0,
+			"hint": "The generator is `pollora make:post-type`, followed by the class name."
+		},
+		{
+			"command": "pollora status",
+			"accept": [
+				"php artisan pollora:status"
+			],
+			"output": "\u001b[33mPollora v13.40.0\u001b[39m\n\n  PHP 8.4.20 | Laravel 13.40.0 | WordPress 7.1.3\n\n  WP_DEBUG: on | Multisite: no | Permalinks: /%postname%/\n\n  Post Types: 1 registered (via discovery)\n    · Lessons [lesson] — App\\Cms\\PostTypes\\Lesson\n  Taxonomies: 0 registered\n  Hooks: 3 registered (2 actions, 1 filters)\n  REST API routes: 0 registered\n  WP-CLI commands: 0 registered\n  Scheduled tasks: 0 registered\n  Auto-discovered providers: 3\n    · App\\Providers\\AppServiceProvider\n    · Theme\\Default\\Providers\\AssetServiceProvider\n    · Theme\\Default\\Providers\\MenuServiceProvider\n\n  Modules: 0 total (0 enabled, 0 disabled)\n\n  Discovery cache: disabled (NullDiscoverCacheDriver)\n\n  Theme: default v1.0 (default)\n  Locales: WordPress en_US | Laravel en\n  Translations: __() override active",
+			"exitCode": 0,
+			"hint": "Discovery found the new class on its own: check with `pollora status`."
+		}
+	]
+}
