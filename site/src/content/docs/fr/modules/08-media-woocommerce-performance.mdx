@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Media Storage](https://pollora.dev/advanced/media/), [WooCommerce](https://pollora.dev/advanced/woocommerce/), [WP Rocket](https://pollora.dev/advanced/wp-rocket/), [Debugging](https://pollora.dev/advanced/debugging/), [Dashboard & Status](https://pollora.dev/advanced/dashboard/), [WordPress Routes](https://pollora.dev/routing/wordpress-routes/) et [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/).
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Media Storage](https://pollora.dev/advanced/media/), [WooCommerce](https://pollora.dev/advanced/woocommerce/), [WP Rocket](https://pollora.dev/advanced/wp-rocket/), [Debugging](https://pollora.dev/advanced/debugging/), [Dashboard & Status](https://pollora.dev/advanced/dashboard/), [WordPress Routes](https://pollora.dev/routing/wordpress-routes/) et [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/). Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 50 min · Prérequis : le module 1 (Route::wp(), auto-découverte).**
@@ -50,8 +50,8 @@ Pour S3 ou un service compatible, installez aussi le pilote Flysystem : `compose
 Pour déplacer une médiathèque existante :
 
 ```bash
-php artisan pollora:media:migrate --from=uploads --to=media             # simulation
-php artisan pollora:media:migrate --from=uploads --to=media --execute   # copie
+pollora media:migrate --from=uploads --to=media             # simulation
+pollora media:migrate --from=uploads --to=media --execute   # copie
 ```
 
 La commande peut être relancée après une interruption et ne modifie jamais la source. `--replace-urls` remplace l'ancienne URL de base dans la base de données.
@@ -91,21 +91,21 @@ Une taille n'est fabriquée à l'envoi que si elle est `eager()`. Les autres le 
 
 - **Disque local** : Nginx et Apache envoient déjà un fichier manquant à PHP, rien à configurer.
 - **S3 derrière un CDN** : l'origine du CDN pour la médiathèque est le site (une règle côté CDN).
-- **S3 sans CDN** : il n'y a **pas de repli**. Déclarez les tailles utilisées en `eager()` et lancez `php artisan pollora:media:thumbs:warm`.
+- **S3 sans CDN** : il n'y a **pas de repli**. Déclarez les tailles utilisées en `eager()` et lancez `pollora media:thumbs:warm`.
 
 Ce que dit l'URL n'est pas cru sur parole : le nom doit être celui d'une taille déclarée, la signature celle que le site aurait produite, l'original ne doit être ni privé ni un GIF. Sinon, `404`, sans coût. La fabrication est aussi bornée (`thumbnails.max_pixels`, `concurrency`, `wait`).
 
 ### Ou par un service
 
-Pour une très grande médiathèque, `thumbnails.driver` (`pollora`, `bunny` ou `imgproxy`) confie les tailles à un service. La déclaration PHP ne change pas, seule la forme de l'URL change : une classe d'image Bunny Optimizer, ou une URL imgproxy signée qui ne nomme qu'un preset. `php artisan pollora:media:thumbs:export --driver=bunny|imgproxy` exporte vos tailles vers le service. Avec un service, aucun fichier n'est fabriqué par le site.
+Pour une très grande médiathèque, `thumbnails.driver` (`pollora`, `bunny` ou `imgproxy`) confie les tailles à un service. La déclaration PHP ne change pas, seule la forme de l'URL change : une classe d'image Bunny Optimizer, ou une URL imgproxy signée qui ne nomme qu'un preset. `pollora media:thumbs:export --driver=bunny|imgproxy` exporte vos tailles vers le service. Avec un service, aucun fichier n'est fabriqué par le site.
 
 ## 3. Fichiers privés signés
 
 Un média est privé quand sa meta `_pollora_media_private` vaut `1`, ou quand le filtre `pollora/media/is_private` le dit. Il est alors servi par une **URL signée** qui expire après `media.private.expiry` (`+6 hours` par défaut), tailles et `srcset` compris. Rien dans l'administration ne marque un média comme privé : on le fait en ligne de commande, en code ou par règle.
 
 ```bash
-php artisan pollora:media:visibility 42 --private
-php artisan pollora:media:visibility 42 --public
+pollora media:visibility 42 --private
+pollora media:visibility 42 --public
 ```
 
 La signature est faite par le disque Laravel (`temporaryUrl()`), donc il faut un magasin d'objets.
@@ -125,7 +125,7 @@ composer require pollora/woocommerce
 ```
 
 <Aside type="caution" title="Piège : sans le paquet, rien ne le dit">
-Un projet qui exécute WooCommerce **doit** installer le paquet. Sans lui, la boutique n'a ni gabarits Blade, ni conditions `Route::wp()` (`shop`, `product`, `cart`…), ni page « Bientôt disponible », ni événements WooCommerce, et **rien ne signale l'erreur**. `php artisan pollora:doctor` (et Outils › Santé du site) avertit quand WooCommerce est actif et que le paquet manque.
+Un projet qui exécute WooCommerce **doit** installer le paquet. Sans lui, la boutique n'a ni gabarits Blade, ni conditions `Route::wp()` (`shop`, `product`, `cart`…), ni page « Bientôt disponible », ni événements WooCommerce, et **rien ne signale l'erreur**. `pollora doctor` (et Outils › Santé du site) avertit quand WooCommerce est actif et que le paquet manque.
 </Aside>
 
 **Gabarits Blade.** WooCommerce cherche un gabarit dans le thème, puis dans son propre dossier. Le paquet ajoute à la recherche la variante Blade de chaque candidat : `resources/views/woocommerce/single-product.blade.php` répond là où `woocommerce/single-product.php` l'aurait fait. Les gabarits partiels (`wc_get_template_part()`) et `wc_get_template()` se résolvent de la même façon.
@@ -220,7 +220,7 @@ composer require --dev pollora/debugbar
 
 C'est une dépendance de développement **volontairement** : `composer install --no-dev` l'exclut, donc un déploiement en production ne l'embarque jamais. Elle tourne exactement quand Laravel Debugbar tourne (`DEBUGBAR_ENABLED`, ou `APP_DEBUG` à défaut) et jamais dans les environnements `production` ou `testing`. Pour garder les onglets de Laravel sans ceux de Pollora : `DEBUGBAR_POLLORA_ENABLED=false`. Les requêtes REST et admin-ajax y apparaissent aussi, grâce à l'en-tête `phpdebugbar-id`.
 
-`php artisan pollora:status` dit **ce qui est là** (versions, post types, hooks, cache de découverte, thème). `php artisan pollora:doctor` dit **si ça marche**, avec la commande qui répare sous chaque problème. Il cherche les échecs silencieux : correctif du noyau absent, `patches.lock.json` périmé, `.env` avec des noms que Pollora ne lit pas, cache de configuration ou de routes hors production, cache de découverte en retard, builds de thème manquants, actions asynchrones ignorées…
+`pollora status` dit **ce qui est là** (versions, post types, hooks, cache de découverte, thème). `pollora doctor` dit **si ça marche**, avec la commande qui répare sous chaque problème. Il cherche les échecs silencieux : correctif du noyau absent, `patches.lock.json` périmé, `.env` avec des noms que Pollora ne lit pas, cache de configuration ou de routes hors production, cache de découverte en retard, builds de thème manquants, actions asynchrones ignorées…
 
 - Il sort avec le code `1` si un contrôle trouve une **erreur** (les avertissements sortent à `0`) : il peut donc bloquer un déploiement ou un job de CI.
 - `--json` produit la même chose pour des scripts.

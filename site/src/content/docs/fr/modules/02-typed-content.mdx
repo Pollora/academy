@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Post Types](https://pollora.dev/content/post-types/), [Typed Meta](https://pollora.dev/content/typed-meta/) et [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/).
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Post Types](https://pollora.dev/content/post-types/), [Typed Meta](https://pollora.dev/content/typed-meta/) et [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/). Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 60 min · Prérequis : le module 1, et savoir ce que sont une meta et un rôle WordPress.**
@@ -37,7 +37,7 @@ class Event {}
 
 Le slug, le nom au singulier et au pluriel viennent du nom de la classe : `Event` donne `event`, `BookReview` donne `book-review`. La classe est trouvée par l'auto-découverte : aucun appel à `register_post_type()`.
 
-En développement, après avoir ajouté une classe : `php artisan discovery:clear`. Pour en générer une : `php artisan pollora:make:post-type Event`.
+En développement, après avoir ajouté une classe : `php artisan discovery:clear`. Pour en générer une : `pollora make:post-type Event`.
 
 ## 2. Des meta typées
 
@@ -78,7 +78,7 @@ WordPress garde la main sur le stockage : `get_post_meta($id, 'capacity', true)`
 `update_post_meta()` ne peut pas refuser une valeur : il applique seulement la sanitisation du type. Les `rules` sont contrôlées à l'écriture depuis PHP (`Meta::of()`, modèles) et depuis REST, pas par les fonctions de WordPress.
 </Aside>
 
-Deux commandes pour vérifier : `php artisan pollora:meta:list` (toutes les meta, par classe) et `php artisan pollora:meta:audit` (valeurs stockées illisibles pour leur type).
+Deux commandes pour vérifier : `pollora meta:list` (toutes les meta, par classe) et `pollora meta:audit` (valeurs stockées illisibles pour leur type).
 
 ## 3. Des rôles déclarés dans le code
 
@@ -105,7 +105,7 @@ Les garde-fous refusent, à la découverte, ce qui donnerait de mauvais droits :
 
 `#[Without]` **retire** une capacité, il ne la met jamais à `false` : WordPress fusionne les rôles d'un utilisateur et un refus explicite dépendrait de leur ordre.
 
-Pour voir le résultat : `php artisan pollora:roles:list` et `php artisan pollora:roles:show event_manager`.
+Pour voir le résultat : `pollora roles:list` et `pollora roles:show event_manager`.
 
 <Aside type="tip" title="Vérifiez une capacité, pas un rôle">
 `@can('export_attendees')` reste juste le jour où un second rôle reçoit cette capacité. `@role('event_manager')` devient faux. Gardez `@role` pour ce qui parle du rôle lui-même.

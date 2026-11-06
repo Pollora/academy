@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Les faits viennent de la documentation officielle, notamment [Structure d'un thème](https://pollora.dev/theming/theme-structure/), [Assets et Vite](https://pollora.dev/theming/assets-vite/) et [Templates Blade dans WordPress](https://pollora.dev/guides/blade-templates-wordpress/) : en cas de doute, c'est elle qui fait foi.
+Testé avec Pollora 13.40. Les faits viennent de la documentation officielle, notamment [Structure d'un thème](https://pollora.dev/theming/theme-structure/), [Assets et Vite](https://pollora.dev/theming/assets-vite/) et [Templates Blade dans WordPress](https://pollora.dev/guides/blade-templates-wordpress/) : en cas de doute, c'est elle qui fait foi. Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 55 min · Prérequis : le module 1 (le modèle mental), et un peu de CSS.**
@@ -19,7 +19,7 @@ Testé avec Pollora 13.40. Les faits viennent de la documentation officielle, no
 ## Générer un thème
 
 ```bash
-php artisan pollora:make:theme
+pollora make:theme
 ```
 
 La commande pose quelques questions, à commencer par le gabarit de départ :
@@ -181,7 +181,7 @@ Pour développer, depuis le dossier du thème : `npm install`, puis `npm run dev
 Un thème Pollora peut aussi être un **thème de blocs** (Full Site Editing) : ses templates sont des `templates/*.html`, édités dans l'éditeur de site, au lieu de vues Blade.
 
 ```bash
-php artisan pollora:make:theme my-journal --repository=pollora/theme-buzz
+pollora make:theme my-journal --repository=pollora/theme-buzz
 ```
 
 Rien à configurer : quand aucune vue Blade ne répond, Pollora laisse WordPress résoudre lui-même le template de blocs, avec le bon statut (le `404.html` répond en HTTP 404). Les vues Blade gagnent là où elles existent, et une route `Route::wp()` ou Laravel répond avant tout template : ne déclarez donc pas de routes pour des pages que rendent les templates de blocs.

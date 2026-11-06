@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Reference version">
-Tested with Pollora 13.40. Facts come from the official documentation: [Post Types](https://pollora.dev/content/post-types/), [Typed Meta](https://pollora.dev/content/typed-meta/) and [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/).
+Tested with Pollora 13.40. Facts come from the official documentation: [Post Types](https://pollora.dev/content/post-types/), [Typed Meta](https://pollora.dev/content/typed-meta/) and [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/). Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
 </Aside>
 
 **Duration: 60 min · Prerequisites: module 1, and knowing what a WordPress meta and a role are.**
@@ -37,7 +37,7 @@ class Event {}
 
 The slug and the singular and plural names come from the class name: `Event` gives `event`, `BookReview` gives `book-review`. Auto-discovery finds the class: no `register_post_type()` call.
 
-In development, after adding a class: `php artisan discovery:clear`. To generate one: `php artisan pollora:make:post-type Event`.
+In development, after adding a class: `php artisan discovery:clear`. To generate one: `pollora make:post-type Event`.
 
 ## 2. Typed meta
 
@@ -78,7 +78,7 @@ WordPress still owns the storage: `get_post_meta($id, 'capacity', true)` still r
 `update_post_meta()` cannot refuse a value: it only applies the type's sanitization. `rules` are enforced on writes from PHP (`Meta::of()`, models) and from REST, not by WordPress's own functions.
 </Aside>
 
-Two commands to check: `php artisan pollora:meta:list` (every meta, by class) and `php artisan pollora:meta:audit` (stored values that cannot be read as their type).
+Two commands to check: `pollora meta:list` (every meta, by class) and `pollora meta:audit` (stored values that cannot be read as their type).
 
 ## 3. Roles declared in code
 
@@ -105,7 +105,7 @@ Safety rules refuse, at discovery, what would grant the wrong rights:
 
 `#[Without]` **removes** a capability, it never sets it to `false`: WordPress merges a user's roles and an explicit denial would depend on their order.
 
-To see the result: `php artisan pollora:roles:list` and `php artisan pollora:roles:show event_manager`.
+To see the result: `pollora roles:list` and `pollora roles:show event_manager`.
 
 <Aside type="tip" title="Check a capability, not a role">
 `@can('export_attendees')` stays right when a second role is given that capability. `@role('event_manager')` becomes wrong. Keep `@role` for content that is about the role itself.

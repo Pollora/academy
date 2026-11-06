@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Actions & Filters](https://pollora.dev/hooks/actions-filters/), [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/), [Events & Listeners](https://pollora.dev/hooks/events-listeners/) et [WordPress Events Reference](https://pollora.dev/hooks/wordpress-events-reference/).
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Actions & Filters](https://pollora.dev/hooks/actions-filters/), [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/), [Events & Listeners](https://pollora.dev/hooks/events-listeners/) et [WordPress Events Reference](https://pollora.dev/hooks/wordpress-events-reference/). Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 60 min · Prérequis : le module 1, et savoir ce que sont une action et un filtre WordPress.**
@@ -70,8 +70,8 @@ Vous n'enregistrez rien : l'auto-découverte parcourt `app/` (ainsi que les thè
 `app/Cms/Hooks` est la convention, et c'est là qu'écrivent les générateurs, mais toute classe sous `app/` est trouvée. Groupez par fonctionnalité (`Seo`, `Media`, `Admin`), pas par nom de hook.
 
 ```bash
-php artisan pollora:make:action Seo
-php artisan pollora:make:filter ContentFilters
+pollora make:action Seo
+pollora make:filter ContentFilters
 ```
 
 Pour qu'une classe échappe à la découverte, ajoutez `#[SkipDiscovery]` (de `Pollora\Attributes\SkipDiscovery`).

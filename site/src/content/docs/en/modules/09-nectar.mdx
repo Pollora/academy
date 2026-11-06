@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Reference version">
-Tested with Pollora 13.40. Facts come from the official documentation: [Nectar](https://pollora.dev/nectar/overview/), [Docs MCP Server](https://pollora.dev/nectar/docs-mcp-server/), [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/) and [Abilities](https://pollora.dev/advanced/abilities/). The documentation does not pin a Nectar version: use the one Composer installs.
+Tested with Pollora 13.40. Facts come from the official documentation: [Nectar](https://pollora.dev/nectar/overview/), [Docs MCP Server](https://pollora.dev/nectar/docs-mcp-server/), [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/) and [Abilities](https://pollora.dev/advanced/abilities/). The documentation does not pin a Nectar version: use the one Composer installs. Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
 </Aside>
 
 **Duration: 50 min · Prerequisites: module 1 (modules 2 to 4 help: post types, attributes, hooks, blocks). This module is for developers who use Claude Code as their coding agent.**
@@ -159,7 +159,7 @@ Nectar's tools report state, but **you review what the agent writes**. Treat its
 
 - run the tests;
 - run `vendor/bin/pint` for style (it fixes PHP files);
-- run `php artisan pollora:doctor`, which catches silent failures.
+- run `pollora doctor`, which catches silent failures.
 
 What an agent can get wrong, honestly: follow an old tutorial rather than Pollora's conventions; assume an API exists; present an unverified answer with confidence; forget an authorization check. Ask it to cite the documentation page it follows, and to verify with a tool when possible.
 
@@ -185,7 +185,7 @@ There is no lab exercise for this module. On your own Pollora project, in develo
 1. `composer require pollora/nectar --dev`, then `php artisan boost:install`, selecting `pollora/nectar`.
 2. Add `pollora-nectar` to `.mcp.json` (section 3) and connect the docs with `claude mcp add --transport http pollora-docs https://pollora.dev/mcp`.
 3. In Claude Code, ask: "Call `pollora_status`, then list the post types with `post_types_info`."
-4. Give it a small task with a precise prompt (section 5), then review: tests, `vendor/bin/pint`, `php artisan pollora:doctor`.
+4. Give it a small task with a precise prompt (section 5), then review: tests, `vendor/bin/pint`, `pollora doctor`.
 
 Want to expose your own site to agents? [Abilities](https://pollora.dev/advanced/abilities/) declare what the site can do, with permissions and an input schema. An ability is not an MCP tool, but what one is made of; without `can()`, it refuses everything.
 
@@ -235,7 +235,7 @@ Nectar's tools are read-only. What does that imply for the code the agent writes
 
 - [ ] It is necessarily correct, since the agent could check the state
   > The tools describe state; they do not validate code.
-- [x] It remains a draft: tests, `vendor/bin/pint` and `php artisan pollora:doctor` are still on you
+- [x] It remains a draft: tests, `vendor/bin/pint` and `pollora doctor` are still on you
 - [ ] The agent cannot write files
 
 Read-only means the tools do not modify the application, not that the agent is infallible.

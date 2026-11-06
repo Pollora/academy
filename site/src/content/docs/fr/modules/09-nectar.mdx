@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Nectar](https://pollora.dev/nectar/overview/), [Serveur MCP de la documentation](https://pollora.dev/nectar/docs-mcp-server/), [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/) et [Abilities](https://pollora.dev/advanced/abilities/). La documentation ne fixe pas de version de Nectar : suivez celle que Composer installe.
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Nectar](https://pollora.dev/nectar/overview/), [Serveur MCP de la documentation](https://pollora.dev/nectar/docs-mcp-server/), [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/) et [Abilities](https://pollora.dev/advanced/abilities/). La documentation ne fixe pas de version de Nectar : suivez celle que Composer installe. Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 50 min · Prérequis : le module 1 (les modules 2 à 4 aident : post types, attributs, hooks, blocs). Ce module s'adresse à qui utilise Claude Code comme agent de code.**
@@ -159,7 +159,7 @@ Les outils de Nectar décrivent l'état, mais **c'est vous qui relisez ce que l'
 
 - lancez les tests ;
 - lancez `vendor/bin/pint` pour le style (corrige les fichiers PHP) ;
-- lancez `php artisan pollora:doctor`, qui détecte les échecs silencieux.
+- lancez `pollora doctor`, qui détecte les échecs silencieux.
 
 Ce qu'un agent peut se tromper, honnêtement : suivre un vieux tutoriel plutôt que les conventions de Pollora ; supposer l'existence d'une API ; présenter avec assurance une réponse non vérifiée ; oublier un contrôle d'autorisation. Demandez-lui de citer la page de documentation qu'il suit, et de vérifier par un outil quand c'est possible.
 
@@ -185,7 +185,7 @@ Aucun exercice du lab pour ce module. Sur votre propre projet Pollora, en dével
 1. `composer require pollora/nectar --dev`, puis `php artisan boost:install`, en choisissant `pollora/nectar`.
 2. Ajoutez `pollora-nectar` au `.mcp.json` (section 3) et branchez la documentation avec `claude mcp add --transport http pollora-docs https://pollora.dev/mcp`.
 3. Dans Claude Code, demandez : « Appelle `pollora_status`, puis liste les post types avec `post_types_info`. »
-4. Donnez-lui une petite tâche avec un prompt précis (section 5), puis relisez : tests, `vendor/bin/pint`, `php artisan pollora:doctor`.
+4. Donnez-lui une petite tâche avec un prompt précis (section 5), puis relisez : tests, `vendor/bin/pint`, `pollora doctor`.
 
 Vous exposez aussi votre site à des agents ? Les [Abilities](https://pollora.dev/advanced/abilities/) déclarent ce que le site sait faire, avec permissions et schéma d'entrée. Une ability n'est pas un outil MCP, mais ce dont il est fait ; sans `can()`, elle refuse tout.
 
@@ -235,7 +235,7 @@ Les outils de Nectar sont en lecture seule. Qu'est-ce que cela implique pour le 
 
 - [ ] Il est forcément correct, puisque l'agent a pu vérifier l'état
   > Les outils décrivent l'état ; ils ne valident pas le code.
-- [x] Il reste un brouillon : tests, `vendor/bin/pint` et `php artisan pollora:doctor` restent à votre charge
+- [x] Il reste un brouillon : tests, `vendor/bin/pint` et `pollora doctor` restent à votre charge
 - [ ] L'agent ne peut pas écrire de fichiers
 
 Lecture seule veut dire que les outils ne modifient pas l'application, pas que l'agent est infaillible.

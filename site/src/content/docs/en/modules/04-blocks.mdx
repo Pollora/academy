@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Reference version">
-Tested with Pollora 13.40. Facts come from the official documentation: [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/) and [Block Bindings](https://pollora.dev/blocks/block-bindings/).
+Tested with Pollora 13.40. Facts come from the official documentation: [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/) and [Block Bindings](https://pollora.dev/blocks/block-bindings/). Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
 </Aside>
 
 **Duration: 60 min · Prerequisites: modules 1 and 2, and the basics of Gutenberg (what a block is, `block.json`).**
@@ -33,7 +33,7 @@ resources/views/blocks/hero-banner/
 ├── editor.css / style.css / view.js
 ```
 
-Generate it with `php artisan pollora:make:block hero-banner --theme`. A Vite build follows (`npm install && npm run build`, or `npm run dev` for hot reload): the command refuses a theme or plugin that has no `package.json` or no `vite.config.js`.
+Generate it with `pollora make:block hero-banner --theme`. A Vite build follows (`npm install && npm run build`, or `npm run dev` for hot reload): the command refuses a theme or plugin that has no `package.json` or no `vite.config.js`.
 
 Blocks are **dynamic by default**: `render.blade.php` renders them on each request, and their markup is not stored in `post_content`. Changing the template updates every existing block, without the "This block contains unexpected or invalid content" error.
 
@@ -139,7 +139,7 @@ Anyone who can edit a post can bind any source to it, so each source only shows 
 
 ### Checking
 
-A binding that cannot show its value gives no error: the block keeps its saved content. `php artisan pollora:doctor` reads the bindings written in the theme's templates, parts and patterns, and names the file, the block and the reason. `php artisan pollora:binding:list` shows what can be bound.
+A binding that cannot show its value gives no error: the block keeps its saved content. `pollora doctor` reads the bindings written in the theme's templates, parts and patterns, and names the file, the block and the reason. `pollora binding:list` shows what can be bound.
 
 ## Check what you remember
 

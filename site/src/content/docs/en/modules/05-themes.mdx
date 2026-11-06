@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Reference version">
-Tested with Pollora 13.40. The facts come from the official documentation, mainly [Theme Structure](https://pollora.dev/theming/theme-structure/), [Assets & Vite](https://pollora.dev/theming/assets-vite/) and [Blade templates in WordPress](https://pollora.dev/guides/blade-templates-wordpress/): when in doubt, the documentation is authoritative.
+Tested with Pollora 13.40. The facts come from the official documentation, mainly [Theme Structure](https://pollora.dev/theming/theme-structure/), [Assets & Vite](https://pollora.dev/theming/assets-vite/) and [Blade templates in WordPress](https://pollora.dev/guides/blade-templates-wordpress/): when in doubt, the documentation is authoritative. Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
 </Aside>
 
 **Duration: 55 min · Prerequisites: module 1 (the mental model), and a little CSS.**
@@ -19,7 +19,7 @@ By the end of this module you will be able to generate a theme, say where its de
 ## Generating a theme
 
 ```bash
-php artisan pollora:make:theme
+pollora make:theme
 ```
 
 The command asks a few questions, starting with the template to start from:
@@ -181,7 +181,7 @@ To develop, from the theme folder: `npm install`, then `npm run dev`; for produc
 A Pollora theme can also be a **block theme** (Full Site Editing): its templates are `templates/*.html`, edited in the Site Editor, instead of Blade views.
 
 ```bash
-php artisan pollora:make:theme my-journal --repository=pollora/theme-buzz
+pollora make:theme my-journal --repository=pollora/theme-buzz
 ```
 
 Nothing to configure: when no Blade view answers, Pollora lets WordPress resolve the block template itself and answers with the right status (`404.html` answers HTTP 404). Blade views still win where they exist, and a `Route::wp()` or Laravel route answers before any template, so don't declare routes for pages the block templates render.
