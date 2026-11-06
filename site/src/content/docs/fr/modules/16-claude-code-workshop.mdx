@@ -1,0 +1,263 @@
+---
+title: "Module 16 · Atelier : coder avec Claude Code"
+description: Confier une taxonomie et une route REST à Claude Code dans le lab, puis juger le résultat — attributs plutôt que fonctions WordPress, permission sur chaque route, pollora doctor — au lieu de croire le compte rendu de l'agent.
+sidebar:
+  label: 16 · Atelier Claude Code
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/), [Nectar](https://pollora.dev/nectar/overview/), [Taxonomies](https://pollora.dev/content/taxonomies/), [Typed Meta](https://pollora.dev/content/typed-meta/), [REST API](https://pollora.dev/advanced/rest-api/) et [Dashboard et statut](https://pollora.dev/advanced/dashboard/). Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
+</Aside>
+
+**Durée : 75 min · Prérequis : les modules 1, 2 et 9 (le module 6 aide pour l'exercice 07). Claude Code installé, et le lab en place (`lab/bin/lab setup`).**
+
+Ce module est un atelier, pas un cours : vous donnez deux tâches à Claude Code, il écrit le code, et **le lab note le résultat**. À la fin, vous savez briefer un agent, relire son diff avec une liste de contrôle, et réagir quand il se trompe.
+
+## 1. Ce qui est noté, et ce qui ne l'est pas
+
+Rien de ce que vous tapez ni de ce que l'agent écrit dans la conversation n'est noté. Le lab ne lit pas la session : il lance des tests sur **ce qui reste dans le projet**, de façon déterministe. C'est voulu : un agent ne répond pas deux fois la même chose, mais un projet qui passe ou ne passe pas les tests, si.
+
+Chaque exercice vérifie trois choses :
+
+1. **Le comportement** : la taxonomie est enregistrée, la route répond, la permission refuse.
+2. **La convention du framework** : aucun appel direct à `register_post_type()`, `register_taxonomy()`, `register_meta()`, `add_action()`, `add_filter()` ou `register_rest_route()` dans les fichiers PHP de `app/`. Le test les cherche dans le code (pas dans les commentaires) et donne `fichier:ligne` quand il en trouve.
+3. **La santé du projet** : `pollora doctor` ne signale aucune erreur.
+
+<Aside type="caution" title="Relisez le diff avant de lancer lab check">
+Le test dit si le résultat est conforme, pas s'il est bon. Un agent peut passer les tests et ajouter une dépendance, toucher un autre fichier ou laisser du code mort. Relisez le diff (section 5) **avant** `lab/bin/lab check`, pas après.
+</Aside>
+
+## 2. Préparer le lab pour l'agent
+
+Un agent sans contexte retombe sur du WordPress classique (module 9). Le lab installe donc ce qui lui donne le contexte de Pollora :
+
+```bash
+lab/bin/lab ai-setup
+```
+
+La commande est idempotente (vous pouvez la relancer). Elle fait deux choses, exactement celles de la documentation ([Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/#install-and-configure)) :
+
+- `composer require pollora/nectar --dev` dans le projet du lab (Nectar exige Laravel Boost, qui s'installe avec lui) ;
+- l'entrée `pollora-nectar` dans le `.mcp.json` du projet, dans sa variante DDEV puisque le lab en est un : `"command": "ddev"` avec les arguments `exec php artisan nectar:mcp`.
+
+Il reste **une étape que vous faites à la main**, parce que l'installeur de Boost pose des questions et que le lab ne peut pas y répondre à votre place. Dans `lab/academy-lab` :
+
+```bash
+ddev exec php artisan boost:install
+```
+
+Choisissez Claude Code comme agent et, quand Boost interroge sur les paquets tiers, `pollora/nectar`. Boost écrit alors les guidelines et les skills dans les fichiers que Claude Code lit (`CLAUDE.md`, `AGENTS.md`…). Variante documentée : mettre `{"packages": ["pollora/nectar"]}` dans `boost.json`, puis `ddev exec php artisan boost:update`.
+
+Vous pouvez aussi brancher la documentation de Pollora à Claude Code (module 9) : `claude mcp add --transport http pollora-docs https://pollora.dev/mcp`.
+
+`lab check` et `lab verify` fonctionnent avec ou sans ces paquets : ils ne s'en servent pas.
+
+### Vérifier que l'agent voit Nectar
+
+Lancez Claude Code depuis `lab/academy-lab` (c'est là qu'est le `.mcp.json`) et demandez :
+
+> Appelle `pollora_status`, puis `taxonomies_info`, et résume ce que tu vois.
+
+Vous devez retrouver les versions de PHP, de Laravel, de Pollora et de WordPress, le thème actif, puis les taxonomies enregistrées. Si l'agent répond « je n'ai pas cet outil », Nectar n'est pas visible : le serveur n'est pas déclaré dans `.mcp.json`, ou Nectar ne se charge pas, car il ne se charge que si `APP_ENV` vaut `local` ou `development`.
+
+### Un point de départ pour revenir en arrière
+
+Le projet du lab n'est pas un dépôt Git. Faites-en un avant de lancer l'agent, ce qui vous donne le diff à relire et le retour arrière de la section 6 :
+
+```bash
+lab/bin/lab reset 06          # depuis la racine du dépôt : le point de départ de l'exercice (section 4)
+cd lab/academy-lab
+git init
+git add -A && git commit -m "Départ de l'exercice"
+```
+
+(Le `.gitignore` du projet exclut déjà `vendor/`, `node_modules/` et `.env`.) Après un `lab reset` suivant, refaites un commit de départ.
+
+## 3. Briefer un agent
+
+Le module 9 donne la règle : des prompts courts, mais précis sur le résultat attendu. Comparez.
+
+> **Vague** : « Ajoute des lieux aux événements. »
+
+L'agent doit deviner : une taxonomie ou une meta ? quel slug (`venue`, `lieu`, `location`) ? visible dans l'API REST ? où mettre le fichier ? comment savoir que c'est fini ? Il choisira, parfois bien, parfois avec `register_taxonomy()` dans `functions.php`, et il dira que c'est terminé.
+
+> **Précis** : le prompt de l'exercice 06, ci-dessous.
+
+Un bon brief contient cinq choses, que les prompts du lab suivent :
+
+| Élément | Dans le prompt de l'exercice 06 |
+|---|---|
+| **Le résultat, avec ses noms** | une taxonomie `venue` sur le post type `event`, une meta `seats` |
+| **La visibilité** | visible dans l'API REST ; `seats` en entier, défaut 0 |
+| **La convention** | des attributs PHP dans `app/Cms/Taxonomies/`, aucune fonction d'enregistrement WordPress |
+| **Comment vérifier** | `taxonomies_info`, puis `php artisan pollora:doctor` |
+| **Les limites** | « Touch nothing else. » |
+
+Le prompt est en anglais, comme le code et la documentation : c'est le même fichier pour tous les lecteurs du cours, et vous pouvez l'adapter. Ce que vous ne devez pas perdre en le traduisant, ce sont les noms (`venue`, `seats`) et les contraintes, parce que les tests les vérifient.
+
+## 4. Les exercices
+
+<Aside type="tip" title="Dans le lab">
+Le lab est installé (`lab/bin/lab setup`, voir le [module 1](/fr/modules/01-mental-model/)) et `lab/bin/lab ai-setup` est fait. Les deux exercices sont indépendants : chacun repart d'un projet où le post type `event` existe déjà.
+</Aside>
+
+### Exercice 06 · Une taxonomie, par l'agent
+
+`lab/bin/lab reset 06` met le projet au départ (il efface aussi `app/Cms/Taxonomies/` d'un essai précédent). Lancez Claude Code dans `lab/academy-lab` et collez ce prompt (c'est le contenu de `lab/exercises/06-agent-taxonomy/PROMPT.md`) :
+
+```text
+Add a `venue` taxonomy to this Pollora project, attached to the `event` post type (`app/Cms/PostTypes/Event.php`).
+
+- The taxonomy slug is `venue`. It must be visible in the REST API.
+- Give its terms a typed meta named `seats`: an integer, with a default of 0, exposed in the REST API.
+- Follow Pollora's conventions: declare it with PHP attributes in a class under `app/Cms/Taxonomies/`. Do not call `register_taxonomy()`, `register_meta()` or any other WordPress registration function.
+- Check your work: confirm with the Nectar tool `taxonomies_info` that `venue` is registered for `event`, run `php artisan pollora:doctor`, and fix what it reports.
+- Touch nothing else.
+```
+
+Quand l'agent a fini, **relisez le diff** (section 5), puis `lab/bin/lab check 06`. Le lab vérifie :
+
+- la taxonomie `venue` est enregistrée et rattachée à `event` ;
+- `show_in_rest` est activé ;
+- la meta de terme `seats` est enregistrée avec le type `integer` et exposée dans REST ;
+- aucun appel direct aux fonctions d'enregistrement dans `app/` ;
+- `pollora doctor` (lancé dans le test) sort sans erreur.
+
+Pour comparer avec une solution écrite à la main : `lab/bin/lab solve 06` (un spoiler, et il écrase le travail de l'agent).
+
+### Exercice 07 · Une route REST avec permission, par l'agent
+
+`lab/bin/lab reset 07`, puis collez dans Claude Code le contenu de `lab/exercises/07-agent-rest-route/PROMPT.md` :
+
+```text
+Add two REST API endpoints for the `event` post type of this Pollora project, in a class under `app/Cms/Rest/`.
+
+- `GET /wp-json/app/v1/events` lists the published events as JSON, each with its `id` and its `title`. It is public on purpose: anyone may call it, logged in or not.
+- `POST /wp-json/app/v1/events` creates an event from a `title` parameter and answers 201 with the new `id` and `title`. Only users who can `edit_posts` may call it: a visitor is refused, and so is a subscriber. The event is created as a draft.
+- Follow Pollora's conventions: `#[WpRestRoute]` and `#[Method]`, and a permission on each of the two endpoints, using the permission classes of `pollora/wp-rest`. Do not call `register_rest_route()`, `add_action()` or any other WordPress registration function.
+- Check your work: run `php artisan pollora:doctor` and fix what it reports.
+- Touch nothing else.
+```
+
+Relisez le diff, puis `lab/bin/lab check 07`. Le lab vérifie :
+
+- la route `app/v1/events` existe, avec une méthode `GET` et une méthode `POST` ;
+- un visiteur anonyme obtient 200 et la liste des événements publiés (pas les brouillons) ;
+- un visiteur anonyme est refusé (401 ou 403) sur le `POST`, et rien n'est créé ;
+- un abonné (sans `edit_posts`) est refusé en 403 ;
+- un éditeur obtient 201 et un événement en brouillon ;
+- la convention (aucune fonction d'enregistrement dans `app/`) et `pollora doctor`.
+
+Ce que la [documentation](https://pollora.dev/advanced/rest-api/) donne à l'agent, et à vous : `Everyone::class` déclare une route publique **exprès**, `new Can('edit_posts')` laisse passer un utilisateur qui a la capacité (401 pour un visiteur, 403 pour un connecté sans la capacité), et la permission d'une méthode **remplace** celle de la classe.
+
+## 5. Relire le diff d'un agent
+
+Votre liste de contrôle, dans l'ordre. Elle étend celle du module 9 :
+
+- **Le périmètre.** `git status` et `git diff` : seuls les fichiers attendus ont changé. Pas de dépendance ajoutée dans `composer.json`, pas de fichier de config réécrit, pas de test modifié ou supprimé.
+- **Des attributs, pas des fonctions WordPress.** Cherchez `register_post_type(`, `register_taxonomy(`, `register_meta(`, `add_action(`, `add_filter(`, `register_rest_route(`. C'est ce que le lab cherche dans `app/` : relisez aussi ce qu'il ne cherche pas (un thème, un plugin).
+- **Une permission sur chaque route REST.** Chaque `#[WpRestRoute]` nomme sa permission : `Everyone::class` si la route est publique exprès, sinon une vraie permission (`IsLoggedIn`, `IsAdmin`, `new Can(…)`). Depuis `pollora/wp-rest` 2.0 (framework 13.39.3), une route sans permission est refusée ; un agent qui « corrige » en rendant tout public, ou en retournant le filtre `pollora/wp-rest/private_by_default` à `false`, ouvre ce que vous vouliez fermer.
+- **Aucun `{!! !!}` sur une donnée d'entrée.** Blade échappe `{{ }}` ; `{!! !!}` écrit le HTML tel quel. Sur une valeur venue d'un visiteur, d'une meta ou d'un paramètre, c'est une faille. Le module Sécurité y revient.
+- **Des tests.** Y en a-t-il, et prouvent-ils quelque chose ? Un test qui n'échoue jamais ne protège de rien.
+- **`pollora doctor`.** Il détecte les échecs silencieux : par exemple une classe ajoutée depuis l'écriture du cache de découverte, donc jamais enregistrée (le fix est `php artisan discovery:clear`). Il sort en 1 sur une erreur.
+- **Le style.** `vendor/bin/pint` corrige les fichiers PHP.
+- **Ce qu'il affirme.** « C'est testé » : par quelle commande ? « L'API existe » : dans quelle page de la documentation ? Demandez-lui de citer la page, et de vérifier avec un outil quand c'est possible.
+
+## 6. Quand l'agent se trompe
+
+Il se trompera, ou s'écartera du brief. Dans l'ordre :
+
+1. **Lisez le message du test.** Les tests du lab disent ce qui manque et, pour la convention, le `fichier:ligne` fautif. Donnez-le tel quel à l'agent.
+2. **Revenez en arrière avec Git** si le diff part dans tous les sens : `git restore .` puis `git clean -fd` dans `lab/academy-lab` ramènent le projet à votre commit de départ. Mieux vaut repartir d'un brief corrigé que réparer un diff que vous ne comprenez plus.
+3. **Réduisez la tâche.** Une taxonomie d'abord, la meta ensuite ; le `GET` d'abord, le `POST` ensuite. Une petite étape se relit et se vérifie.
+4. **Indiquez la page de documentation.** « Suis la page Taxonomies de pollora.dev », ou, avec le serveur MCP de la documentation branché, « cherche dans la documentation Pollora ». Un agent qui lit la bonne page cesse d'inventer.
+5. **Ne touchez pas aux tests.** `lab check` recopie les tests de l'exercice dans le projet à chaque exécution : une modification d'un test est écrasée, et ce serait de toute façon tricher.
+
+## 7. Limites, honnêtement
+
+- **Les sorties varient d'une exécution à l'autre.** Le même prompt peut donner un code différent, qui passe ou non. C'est pourquoi le lab note le résultat, pas la session.
+- **Un test vert n'est pas un bon code.** Le lab ne vérifie ni les libellés, ni l'interface d'administration, ni la qualité du code. La recherche des fonctions interdites ne regarde que `app/`.
+- **Nectar décrit l'état, il ne le valide pas.** Ses outils sont en lecture seule et ne se chargent qu'en `local` ou `development`. `registered_hooks` ne liste que les hooks déclarés avec les attributs de Pollora.
+- **`pollora doctor` voit ce que sa liste de contrôles couvre.** Un projet sans erreur peut encore être faux.
+- **Le contexte se périme.** Après un `composer update`, `php artisan boost:update` rafraîchit guidelines et skills.
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Ce que note le lab">
+Qu'est-ce que `lab/bin/lab check 06` note ?
+
+- [ ] Le prompt que vous avez écrit
+  > Le lab ne lit ni le prompt ni la conversation.
+- [x] Ce que l'agent a laissé dans le projet : le comportement, la convention du framework et `pollora doctor`
+- [ ] La liste des outils MCP que l'agent a appelés
+  > Rien de la session n'est enregistré ni noté.
+
+Un agent varie d'une exécution à l'autre ; un projet passe les tests ou non.
+
+</Quiz>
+
+<Quiz title="« Ça marche, donc c'est bon »">
+L'agent a déclaré la taxonomie `venue` avec `register_taxonomy()` dans `AppServiceProvider` : elle apparaît bien dans WordPress. Que donne `lab/bin/lab check 06` ?
+
+- [ ] Tout est vert, puisque la taxonomie est enregistrée
+  > Le comportement est correct, mais ce n'est qu'un des trois contrôles.
+- [x] Un échec : le test de convention trouve l'appel dans `app/` et donne `fichier:ligne`
+- [ ] Un échec uniquement sur `show_in_rest`
+  > Rien ne relie cet échec à l'appel direct.
+
+Une taxonomie enregistrée par `register_taxonomy()` fonctionne, mais elle va contre le framework : la découverte et les outils de Pollora (`pollora status`, Nectar) s'appuient sur les attributs.
+
+</Quiz>
+
+<Quiz title="Une route sans permission">
+L'agent écrit une classe `#[WpRestRoute('app/v1', 'events')]` sans `permissionCallback` et affirme que « le endpoint public fonctionne ». Avec Pollora 13.40, que reçoit un visiteur ?
+
+- [ ] La liste des événements, la route étant publique par défaut
+  > C'était le cas avant `pollora/wp-rest` 2.0 ; ce n'est plus le cas.
+- [x] Un refus `rest_forbidden` avec le statut 401 : il faut `Everyone::class` pour une route publique exprès
+- [ ] Une erreur 500 au démarrage
+  > La route s'enregistre ; c'est son accès qui est refusé.
+
+Depuis `pollora/wp-rest` 2.0 (framework 13.39.3), une route sans permission est privée. Ne la rendez pas publique par défaut : nommez `Everyone::class`.
+
+</Quiz>
+
+<Quiz title="Le meilleur brief">
+Lequel de ces prompts donne à l'agent le plus de chances de réussir l'exercice 06 ?
+
+- [ ] « Ajoute une taxonomie pour les lieux d'événements. »
+  > Le slug, la visibilité REST, la meta, l'endroit et la façon de vérifier sont à deviner.
+- [x] Le résultat avec ses noms (`venue`, `seats`), les attributs plutôt que les fonctions WordPress, la vérification par `taxonomies_info` et `pollora doctor`, et « touche à rien d'autre »
+- [ ] Un long extrait de code WordPress à adapter
+  > Il pousse l'agent vers `register_taxonomy()`, exactement ce que le framework évite.
+
+Un brief précis ne dit pas comment coder : il dit ce qui doit exister, avec quelles contraintes, et comment le vérifier.
+
+</Quiz>
+
+<Quiz title="Le premier essai échoue">
+`lab check 07` échoue : l'éditeur reçoit un 403. Que faites-vous ?
+
+- [ ] Vous demandez à l'agent de modifier le test dans `tests/Feature/Lab`
+  > `lab check` recopie les tests à chaque exécution : la modification serait écrasée, et ce serait tricher.
+- [x] Vous lisez le message du test, relisez le diff, puis donnez la correction à l'agent (ou revenez en arrière avec Git si le diff dérive)
+- [ ] Vous relancez le même prompt jusqu'à ce que ça passe
+  > Les sorties varient : cela peut finir par passer sans que vous compreniez pourquoi, et sans relecture.
+
+Le message du test dit ce qui manque ; la relecture dit pourquoi.
+
+</Quiz>
+
+<QuizResults />
+
+## Pour aller plus loin
+
+- [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/) : installation, exemples de prompts, limites
+- [Nectar](https://pollora.dev/nectar/overview/) : outils MCP, skills, configuration
+- [Taxonomies](https://pollora.dev/content/taxonomies/) et [Typed Meta](https://pollora.dev/content/typed-meta/) : la matière de l'exercice 06
+- [REST API](https://pollora.dev/advanced/rest-api/) : `#[WpRestRoute]`, `#[Method]` et les classes de permission, matière de l'exercice 07
+- [Dashboard et statut](https://pollora.dev/advanced/dashboard/) : `pollora doctor`
+- Le [module 9](/fr/modules/09-nectar/) pour l'installation de Nectar, le [module 11](/fr/modules/11-ai-upgrade/) pour confier une montée de version à un agent, et le module Sécurité pour relire les permissions et l'échappement

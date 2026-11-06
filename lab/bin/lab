@@ -3,6 +3,7 @@
 # Pollora Academy lab: install the practice project and grade the exercises.
 #
 #   lab setup            create the project (DDEV) and seed its content
+#   lab ai-setup         install Nectar (and Laravel Boost) and register its MCP server, for Claude Code
 #   lab check  <NN>      run the tests of exercise NN
 #   lab reset  <NN>      put exercise NN back to its starting point
 #   lab solve  <NN>      copy the solution of exercise NN (spoiler)
@@ -34,6 +35,12 @@ require_project() {
 
 in_project() { (cd "$PROJECT_DIR" && "$@"); }
 
+# The base class and the shared assertions of the exercises are copied into the project's tests/
+copy_support_tests() {
+  mkdir -p "$PROJECT_DIR/tests"
+  cp "$LAB_DIR"/support/tests/*.php "$PROJECT_DIR/tests/"
+}
+
 cmd_setup() {
   command -v ddev >/dev/null || die "DDEV is required: https://ddev.readthedocs.io"
   command -v pollora >/dev/null || die "the Pollora CLI is required: composer global require pollora/cli"
@@ -49,10 +56,51 @@ cmd_setup() {
   fi
 
   mkdir -p "$PROJECT_DIR/tests/Feature/Lab"
-  cp "$LAB_DIR/support/tests/LabTestCase.php" "$PROJECT_DIR/tests/LabTestCase.php"
+  copy_support_tests
 
   echo "Lab ready: $(in_project ddev composer show pollora/framework | grep -E '^versions' | tr -d '*')"
   echo "Next: lab reset 01, then read the exercise on the site and run: lab check 01"
+}
+
+# Give Claude Code the context of a Pollora project: Nectar (which requires Laravel Boost) and its MCP server.
+# Safe to run again: what is installed or registered is left alone. `boost:install` is interactive and stays a manual step.
+cmd_ai_setup() {
+  require_project
+  command -v jq >/dev/null || die "jq is required to write .mcp.json"
+  in_project ddev start >/dev/null 2>&1 || die "ddev could not start the project"
+
+  if in_project ddev composer show pollora/nectar >/dev/null 2>&1; then
+    echo "pollora/nectar is already installed."
+  else
+    in_project ddev composer require pollora/nectar --dev --no-interaction
+  fi
+
+  # The server entry of the documentation (guides/ai-coding-agents-wordpress); inside the container for a DDEV project
+  local entry='{"command":"php","args":["artisan","nectar:mcp"]}'
+  if [[ -d "$PROJECT_DIR/.ddev" ]]; then
+    entry='{"command":"ddev","args":["exec","php","artisan","nectar:mcp"]}'
+  fi
+  local file="$PROJECT_DIR/.mcp.json"
+  if [[ -f "$file" ]] && jq -e '.mcpServers["pollora-nectar"]' "$file" >/dev/null 2>&1; then
+    echo ".mcp.json already registers pollora-nectar."
+  else
+    [[ -f "$file" ]] || echo '{}' > "$file"
+    jq --argjson entry "$entry" '.mcpServers = ((.mcpServers // {}) + {"pollora-nectar": $entry})' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    echo "pollora-nectar registered in .mcp.json."
+  fi
+
+  cat <<'MESSAGE'
+
+One step is left, and it is yours: Laravel Boost writes the guidelines and the skills Claude Code reads,
+and its installer asks questions. In lab/academy-lab, run:
+
+    ddev exec php artisan boost:install
+
+Select your agent (Claude Code) and, when Boost asks about third-party packages, select pollora/nectar.
+(Alternative: put {"packages": ["pollora/nectar"]} in boost.json, then run: ddev exec php artisan boost:update)
+
+Then start Claude Code from lab/academy-lab.
+MESSAGE
 }
 
 cmd_check() {
@@ -60,6 +108,7 @@ cmd_check() {
   require_project
   rm -rf "$PROJECT_DIR/tests/Feature/Lab" && mkdir -p "$PROJECT_DIR/tests/Feature/Lab"
   cp "$dir"/tests/*.php "$PROJECT_DIR/tests/Feature/Lab/"
+  copy_support_tests
   # Classes added or edited since the last run must be discovered again
   in_project ddev exec php artisan discovery:clear >/dev/null
   # WordPress cannot be loaded twice in one process: one process per test
@@ -69,6 +118,13 @@ cmd_check() {
 cmd_reset() {
   local dir; dir="$(exercise_dir "${1:-}" reset)"
   require_project
+  # What a previous attempt left (an agent names its files as it likes): the exercise lists those paths
+  if [[ -f "$dir/reset-paths" ]]; then
+    while IFS= read -r path; do
+      [[ "$path" =~ ^app/[A-Za-z0-9_/.-]+$ && "$path" != *..* ]] || continue
+      rm -rf "${PROJECT_DIR:?}/$path"
+    done < "$dir/reset-paths"
+  fi
   cp -r "$dir"/starter/. "$PROJECT_DIR"/
   echo "Exercise ${1} is back to its starting point."
 }
@@ -190,6 +246,7 @@ cmd_capture() {
 
 case "${1:-}" in
   setup)  cmd_setup ;;
+  ai-setup) cmd_ai_setup ;;
   check)  cmd_check "${2:-}" ;;
   reset)  cmd_reset "${2:-}" ;;
   solve)  cmd_solve "${2:-}" ;;

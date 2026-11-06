@@ -1,0 +1,263 @@
+---
+title: "Module 16 · Workshop: coding with Claude Code"
+description: Hand a taxonomy and a REST route to Claude Code in the lab, then judge the result — attributes rather than WordPress functions, a permission on every route, pollora doctor — instead of trusting the agent's report.
+sidebar:
+  label: 16 · Claude Code workshop
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Reference version">
+Tested with Pollora 13.40. Facts come from the official documentation: [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/), [Nectar](https://pollora.dev/nectar/overview/), [Taxonomies](https://pollora.dev/content/taxonomies/), [Typed Meta](https://pollora.dev/content/typed-meta/), [REST API](https://pollora.dev/advanced/rest-api/) and [Dashboard & Status](https://pollora.dev/advanced/dashboard/). Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
+</Aside>
+
+**Duration: 75 min · Prerequisites: modules 1, 2 and 9 (module 6 helps for exercise 07). Claude Code installed, and the lab set up (`lab/bin/lab setup`).**
+
+This module is a workshop, not a lecture: you give Claude Code two tasks, it writes the code, and **the lab grades the result**. By the end you can brief an agent, review its diff with a checklist, and react when it goes wrong.
+
+## 1. What is graded, and what is not
+
+Nothing you type and nothing the agent says in the conversation is graded. The lab does not read the session: it runs tests on **what is left in the project**, deterministically. That is on purpose: an agent never answers the same way twice, but a project either passes the tests or it does not.
+
+Each exercise checks three things:
+
+1. **The behaviour**: the taxonomy is registered, the route answers, the permission refuses.
+2. **The framework's convention**: no direct call to `register_post_type()`, `register_taxonomy()`, `register_meta()`, `add_action()`, `add_filter()` or `register_rest_route()` in the PHP files of `app/`. The test looks for them in the code (not in comments) and reports `file:line` when it finds one.
+3. **The health of the project**: `pollora doctor` reports no error.
+
+<Aside type="caution" title="Read the diff before running lab check">
+The test says whether the result conforms, not whether it is good. An agent can pass the tests and still add a dependency, touch another file or leave dead code. Read the diff (section 5) **before** `lab/bin/lab check`, not after.
+</Aside>
+
+## 2. Setting up the lab for the agent
+
+An agent without context falls back on classic WordPress (module 9). So the lab installs what gives it the context of Pollora:
+
+```bash
+lab/bin/lab ai-setup
+```
+
+The command is idempotent (you can run it again). It does two things, exactly those of the documentation ([AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/#install-and-configure)):
+
+- `composer require pollora/nectar --dev` in the lab project (Nectar requires Laravel Boost, which is installed with it);
+- the `pollora-nectar` entry in the project's `.mcp.json`, in its DDEV variant since the lab is a DDEV project: `"command": "ddev"` with the arguments `exec php artisan nectar:mcp`.
+
+**One step is left for you to do by hand**, because Boost's installer asks questions and the lab cannot answer them for you. In `lab/academy-lab`:
+
+```bash
+ddev exec php artisan boost:install
+```
+
+Pick Claude Code as the agent and, when Boost asks about third-party packages, `pollora/nectar`. Boost then writes the guidelines and skills into the files Claude Code reads (`CLAUDE.md`, `AGENTS.md`…). Documented alternative: put `{"packages": ["pollora/nectar"]}` in `boost.json`, then run `ddev exec php artisan boost:update`.
+
+You can also connect the Pollora documentation to Claude Code (module 9): `claude mcp add --transport http pollora-docs https://pollora.dev/mcp`.
+
+`lab check` and `lab verify` work with or without these packages: they do not use them.
+
+### Check that the agent sees Nectar
+
+Start Claude Code from `lab/academy-lab` (that is where `.mcp.json` lives) and ask:
+
+> Call `pollora_status`, then `taxonomies_info`, and summarise what you see.
+
+You should get back the PHP, Laravel, Pollora and WordPress versions, the active theme, then the registered taxonomies. If the agent says "I don't have that tool", Nectar is not visible: either the server is not declared in `.mcp.json`, or Nectar is not loading, since it only loads when `APP_ENV` is `local` or `development`.
+
+### A starting point to go back to
+
+The lab project is not a Git repository. Make it one before starting the agent: it gives you the diff to review and the way back of section 6:
+
+```bash
+lab/bin/lab reset 06          # from the root of the repository: the exercise's starting point (section 4)
+cd lab/academy-lab
+git init
+git add -A && git commit -m "Start of the exercise"
+```
+
+(The project's `.gitignore` already excludes `vendor/`, `node_modules/` and `.env`.) After a later `lab reset`, commit a new starting point.
+
+## 3. Briefing an agent
+
+Module 9 gives the rule: short prompts, but precise about the expected result. Compare.
+
+> **Vague**: "Add venues to events."
+
+The agent has to guess: a taxonomy or a meta? which slug (`venue`, `lieu`, `location`)? visible in the REST API? where does the file go? how will anyone know it is done? It will choose, sometimes well, sometimes with `register_taxonomy()` in `functions.php`, and it will say it is finished.
+
+> **Precise**: the prompt of exercise 06, below.
+
+A good brief holds five things, which the lab prompts follow:
+
+| Element | In the prompt of exercise 06 |
+|---|---|
+| **The result, with its names** | a `venue` taxonomy on the `event` post type, a `seats` meta |
+| **The visibility** | visible in the REST API; `seats` as an integer, default 0 |
+| **The convention** | PHP attributes in `app/Cms/Taxonomies/`, no WordPress registration function |
+| **How to check** | `taxonomies_info`, then `php artisan pollora:doctor` |
+| **The limits** | "Touch nothing else." |
+
+The prompt is in English, like the code and the documentation: it is the same file for every reader of the course, and you can adapt it. What you must not lose when rewording it are the names (`venue`, `seats`) and the constraints, because the tests check them.
+
+## 4. The exercises
+
+<Aside type="tip" title="In the lab">
+The lab is installed (`lab/bin/lab setup`, see [module 1](/en/modules/01-mental-model/)) and `lab/bin/lab ai-setup` is done. The two exercises are independent: each starts from a project where the `event` post type already exists.
+</Aside>
+
+### Exercise 06 · A taxonomy, done by the agent
+
+`lab/bin/lab reset 06` puts the project at its starting point (it also removes `app/Cms/Taxonomies/` from a previous attempt). Start Claude Code in `lab/academy-lab` and paste this prompt (it is the content of `lab/exercises/06-agent-taxonomy/PROMPT.md`):
+
+```text
+Add a `venue` taxonomy to this Pollora project, attached to the `event` post type (`app/Cms/PostTypes/Event.php`).
+
+- The taxonomy slug is `venue`. It must be visible in the REST API.
+- Give its terms a typed meta named `seats`: an integer, with a default of 0, exposed in the REST API.
+- Follow Pollora's conventions: declare it with PHP attributes in a class under `app/Cms/Taxonomies/`. Do not call `register_taxonomy()`, `register_meta()` or any other WordPress registration function.
+- Check your work: confirm with the Nectar tool `taxonomies_info` that `venue` is registered for `event`, run `php artisan pollora:doctor`, and fix what it reports.
+- Touch nothing else.
+```
+
+When the agent is done, **read the diff** (section 5), then run `lab/bin/lab check 06`. The lab checks:
+
+- the `venue` taxonomy is registered and attached to `event`;
+- `show_in_rest` is on;
+- the `seats` term meta is registered with the `integer` type and exposed in REST;
+- no direct call to the registration functions in `app/`;
+- `pollora doctor` (run inside the test) exits without an error.
+
+To compare with a hand-written solution: `lab/bin/lab solve 06` (a spoiler, and it overwrites the agent's work).
+
+### Exercise 07 · A REST route with a permission, done by the agent
+
+`lab/bin/lab reset 07`, then paste the content of `lab/exercises/07-agent-rest-route/PROMPT.md` into Claude Code:
+
+```text
+Add two REST API endpoints for the `event` post type of this Pollora project, in a class under `app/Cms/Rest/`.
+
+- `GET /wp-json/app/v1/events` lists the published events as JSON, each with its `id` and its `title`. It is public on purpose: anyone may call it, logged in or not.
+- `POST /wp-json/app/v1/events` creates an event from a `title` parameter and answers 201 with the new `id` and `title`. Only users who can `edit_posts` may call it: a visitor is refused, and so is a subscriber. The event is created as a draft.
+- Follow Pollora's conventions: `#[WpRestRoute]` and `#[Method]`, and a permission on each of the two endpoints, using the permission classes of `pollora/wp-rest`. Do not call `register_rest_route()`, `add_action()` or any other WordPress registration function.
+- Check your work: run `php artisan pollora:doctor` and fix what it reports.
+- Touch nothing else.
+```
+
+Read the diff, then `lab/bin/lab check 07`. The lab checks:
+
+- the `app/v1/events` route exists, with a `GET` method and a `POST` method;
+- an anonymous visitor gets 200 and the list of published events (not the drafts);
+- an anonymous visitor is refused (401 or 403) on the `POST`, and nothing is created;
+- a subscriber (without `edit_posts`) is refused with 403;
+- an editor gets 201 and a draft event;
+- the convention (no registration function in `app/`) and `pollora doctor`.
+
+What the [documentation](https://pollora.dev/advanced/rest-api/) gives the agent, and you: `Everyone::class` declares a route public **on purpose**, `new Can('edit_posts')` lets a user with the capability through (401 for a visitor, 403 for a logged-in user without it), and the permission of a method **overrides** the one of the class.
+
+## 5. Reviewing an agent's diff
+
+Your checklist, in order. It extends the one of module 9:
+
+- **The scope.** `git status` and `git diff`: only the expected files changed. No dependency added to `composer.json`, no config file rewritten, no test modified or deleted.
+- **Attributes, not WordPress functions.** Look for `register_post_type(`, `register_taxonomy(`, `register_meta(`, `add_action(`, `add_filter(`, `register_rest_route(`. That is what the lab looks for in `app/`: also read what it does not look at (a theme, a plugin).
+- **A permission on every REST route.** Each `#[WpRestRoute]` names its permission: `Everyone::class` if the route is public on purpose, otherwise a real permission (`IsLoggedIn`, `IsAdmin`, `new Can(…)`). Since `pollora/wp-rest` 2.0 (framework 13.39.3), a route without a permission is refused; an agent that "fixes" it by making everything public, or by returning `false` from the `pollora/wp-rest/private_by_default` filter, opens what you meant to keep closed.
+- **No `{!! !!}` on input.** Blade escapes `{{ }}`; `{!! !!}` writes the HTML as it is. On a value that came from a visitor, a meta or a parameter, it is a hole. The Security module comes back to it.
+- **Tests.** Are there any, and do they prove something? A test that never fails protects nothing.
+- **`pollora doctor`.** It catches silent failures: for instance a class added since the discovery cache was written, so never registered (the fix is `php artisan discovery:clear`). It exits with 1 on an error.
+- **Style.** `vendor/bin/pint` fixes PHP files.
+- **What it claims.** "It is tested": by which command? "That API exists": in which page of the documentation? Ask it to cite the page, and to check with a tool when it can.
+
+## 6. When the agent goes wrong
+
+It will, or it will drift from the brief. In order:
+
+1. **Read the test message.** The lab tests say what is missing and, for the convention, the offending `file:line`. Give it to the agent as it is.
+2. **Revert with Git** if the diff goes everywhere: `git restore .` then `git clean -fd` in `lab/academy-lab` bring the project back to your starting commit. Starting again from a corrected brief beats repairing a diff you no longer understand.
+3. **Shrink the task.** A taxonomy first, the meta next; the `GET` first, the `POST` next. A small step can be read and checked.
+4. **Point it to the documentation page.** "Follow the Taxonomies page of pollora.dev", or, with the documentation MCP server connected, "search the Pollora documentation". An agent that reads the right page stops inventing.
+5. **Do not touch the tests.** `lab check` copies the exercise's tests into the project on every run: an edit to a test is overwritten, and it would be cheating anyway.
+
+## 7. Limits, honestly
+
+- **Outputs vary from run to run.** The same prompt can give different code, which passes or not. That is why the lab grades the result, not the session.
+- **A green test is not good code.** The lab does not check labels, the admin interface or code quality. The search for forbidden functions only looks at `app/`.
+- **Nectar describes the state, it does not validate it.** Its tools are read-only and only load in `local` or `development`. `registered_hooks` only lists hooks declared with Pollora's attributes.
+- **`pollora doctor` sees what its list of checks covers.** A project with no error can still be wrong.
+- **Context goes stale.** After a `composer update`, `php artisan boost:update` refreshes guidelines and skills.
+
+## Check what you learned
+
+<Quiz title="What the lab grades">
+What does `lab/bin/lab check 06` grade?
+
+- [ ] The prompt you wrote
+  > The lab reads neither the prompt nor the conversation.
+- [x] What the agent left in the project: the behaviour, the framework's convention and `pollora doctor`
+- [ ] The list of MCP tools the agent called
+  > Nothing of the session is recorded or graded.
+
+An agent varies from run to run; a project passes the tests or it does not.
+
+</Quiz>
+
+<Quiz title="It works, so it is fine">
+The agent declared the `venue` taxonomy with `register_taxonomy()` in `AppServiceProvider`: it does show up in WordPress. What does `lab/bin/lab check 06` give?
+
+- [ ] All green, since the taxonomy is registered
+  > The behaviour is right, but it is only one of the three checks.
+- [x] A failure: the convention test finds the call in `app/` and reports `file:line`
+- [ ] A failure on `show_in_rest` only
+  > Nothing ties that failure to the direct call.
+
+A taxonomy registered with `register_taxonomy()` works, but it goes against the framework: discovery and Pollora's tools (`pollora status`, Nectar) rely on attributes.
+
+</Quiz>
+
+<Quiz title="A route without a permission">
+The agent writes a `#[WpRestRoute('app/v1', 'events')]` class with no `permissionCallback` and says "the public endpoint works". With Pollora 13.40, what does a visitor get?
+
+- [ ] The list of events, the route being public by default
+  > That was true before `pollora/wp-rest` 2.0; it no longer is.
+- [x] A `rest_forbidden` refusal with a 401 status: a route that is public on purpose needs `Everyone::class`
+- [ ] A 500 error at boot
+  > The route registers; it is its access that is refused.
+
+Since `pollora/wp-rest` 2.0 (framework 13.39.3), a route without a permission is private. Do not make it public by default: name `Everyone::class`.
+
+</Quiz>
+
+<Quiz title="The best brief">
+Which of these prompts gives the agent the best chance of passing exercise 06?
+
+- [ ] "Add a taxonomy for event venues."
+  > The slug, the REST visibility, the meta, the location and how to check are left to guess.
+- [x] The result with its names (`venue`, `seats`), attributes rather than WordPress functions, the check with `taxonomies_info` and `pollora doctor`, and "touch nothing else"
+- [ ] A long WordPress code snippet to adapt
+  > It pushes the agent toward `register_taxonomy()`, exactly what the framework avoids.
+
+A precise brief does not say how to code: it says what must exist, under which constraints, and how to check it.
+
+</Quiz>
+
+<Quiz title="The first attempt fails">
+`lab check 07` fails: the editor gets a 403. What do you do?
+
+- [ ] Ask the agent to change the test in `tests/Feature/Lab`
+  > `lab check` copies the tests again on every run: the change would be overwritten, and it would be cheating.
+- [x] Read the test message, read the diff, then give the agent the fix (or revert with Git if the diff drifts)
+- [ ] Re-run the same prompt until it passes
+  > Outputs vary: it may end up passing without you understanding why, and without any review.
+
+The test message says what is missing; the review says why.
+
+</Quiz>
+
+<QuizResults />
+
+## Going further
+
+- [AI coding agents for WordPress projects](https://pollora.dev/guides/ai-coding-agents-wordpress/): installation, example prompts, limits
+- [Nectar](https://pollora.dev/nectar/overview/): MCP tools, skills, configuration
+- [Taxonomies](https://pollora.dev/content/taxonomies/) and [Typed Meta](https://pollora.dev/content/typed-meta/): the matter of exercise 06
+- [REST API](https://pollora.dev/advanced/rest-api/): `#[WpRestRoute]`, `#[Method]` and the permission classes, the matter of exercise 07
+- [Dashboard & Status](https://pollora.dev/advanced/dashboard/): `pollora doctor`
+- [Module 9](/en/modules/09-nectar/) for installing Nectar, [module 11](/en/modules/11-ai-upgrade/) for handing an upgrade to an agent, and the Security module for reviewing permissions and escaping
