@@ -1,0 +1,682 @@
+---
+title: "Module 13 · De functions.php à Pollora"
+description: "Migrer un projet WordPress existant vers Pollora, un souci à la fois : table de correspondance, exemples avant/après, méthode, pièges et aide de Claude Code."
+sidebar:
+  label: 13 · De functions.php à Pollora
+---
+
+import { Quiz, QuizResults } from 'starlight-quiz/components';
+import { Aside } from '@astrojs/starlight/components';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import TerminalReplay from '../../../../components/TerminalReplay.astro';
+
+<Aside type="note" title="Version de référence">
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/), [Actions & Filters](https://pollora.dev/hooks/actions-filters/), [Custom post types and taxonomies with PHP attributes](https://pollora.dev/guides/custom-post-types-php-attributes/), [Post Types](https://pollora.dev/content/post-types/), [Taxonomies](https://pollora.dev/content/taxonomies/), [Typed Meta](https://pollora.dev/content/typed-meta/), [Options](https://pollora.dev/content/options/), [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/), [AJAX](https://pollora.dev/advanced/ajax/), [REST API](https://pollora.dev/advanced/rest-api/), [Scheduling](https://pollora.dev/advanced/scheduling/), [Blade templates in WordPress](https://pollora.dev/guides/blade-templates-wordpress/), [Assets & Vite](https://pollora.dev/theming/assets-vite/), [Menus](https://pollora.dev/theming/menus/), [Auto-Discovery](https://pollora.dev/core-concepts/auto-discovery/) et [Nectar](https://pollora.dev/nectar/overview/). Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
+</Aside>
+
+**Durée : 65 min · Prérequis : les modules 1, 2 et 3.**
+
+À la fin de ce module, vous savez reprendre un projet WordPress existant (celui d'un client, avec son `functions.php` de 2 000 lignes) et le faire passer à Pollora **par petits pas relus**, sans jamais casser le site, en laissant à WordPress ce qui est à WordPress.
+
+Les extraits « avant » de ce module sont du code WordPress classique, donné **comme exercice de lecture** : ils montrent ce qu'on remplace, ce n'est pas du code à écrire dans un projet Pollora.
+
+## 1. Ce qu'on migre, et ce qu'on laisse
+
+Le but n'est pas de supprimer `functions.php` pour le principe. Les modules 2 et 3 ont montré ce que Pollora apporte : une déclaration **à côté du code qu'elle déclare**, trouvée par l'auto-découverte, avec des services injectés. On migre donc ce qui **déclare quelque chose à WordPress** (un hook, un type de contenu, un rôle, un point d'entrée), et on laisse en l'état ce qui **est** WordPress.
+
+| On migre | On laisse tel quel |
+|---|---|
+| `add_action()` / `add_filter()` de **votre** code | Les hooks que **les plugins** ajoutent eux-mêmes |
+| `register_post_type()`, `register_taxonomy()` | Le comportement du noyau et des plugins : requêtes (`WP_Query`), fonctions de modèle, REST de base |
+| `register_meta()` et les lectures `get_post_meta()` à convertir à la main | `get_post_meta()` lui-même : il continue de renvoyer la chaîne stockée |
+| `add_role()` / `add_cap()` | `current_user_can()` : même réponse que `can()` |
+| `wp_ajax_*`, `register_rest_route()`, `wp_schedule_event()` | `wp_nav_menu()` : il se range dans un template Blade tel quel |
+| Les fichiers de template PHP | Les données déjà en base (options, meta, rôles stockés) |
+
+Une règle guide tout le reste : **une migration ne change pas le comportement**. Mêmes noms de hook, mêmes priorités, mêmes clés, mêmes URL. C'est ce qui permet de relire un diff et de dire « identique ».
+
+## 2. La table de correspondance
+
+| WordPress | Pollora | Module |
+|---|---|---|
+| `add_action('init', 'f', 20)` | `#[Action('init', priority: 20)]` sur une méthode | 3 |
+| `add_filter('the_content', 'f', 10, 2)` | `#[Filter('the_content')]` ; le nombre d'arguments vient de la signature | 3 |
+| `register_post_type('event', [...])` | `#[PostType('event')]` + un attribut par argument | 2 |
+| `register_taxonomy('genre', ['book'], [...])` | `#[Taxonomy('genre', objectType: 'book')]` | 2 |
+| `register_meta()` + casts à chaque `get_post_meta()` | une propriété typée `#[Meta]` + `Meta::of()` | 2 |
+| `add_role()` | `#[Role]` ; `pollora roles:import` convertit un rôle déjà stocké | 2 |
+| `$role->add_cap()` / `remove_cap()` sur un rôle existant | `#[ModifyRole]` + `#[Grants]` / `#[Without]` | 2 |
+| `add_action('wp_ajax_x', …)` (+ `nopriv`) | `#[Ajax('x')]`, avec `access:` pour ouvrir aux invités | 6 |
+| `register_rest_route()` | `#[WpRestRoute]` + `#[Method]` + une permission | 6 |
+| `wp_schedule_event()` + `add_action()` du hook | `#[Schedule(Every::DAY)]` sur la méthode | 7 |
+| `get_option()` / `update_option()` | la facade `Option` (facultatif) | |
+| `page-about.php` | `resources/views/page-about.blade.php` | 5 |
+| `wp_enqueue_script()` / `wp_enqueue_style()` | `Asset::add(…)` dans un service provider | 5 |
+| `wp_nav_menu()` | inchangé | 5 |
+
+## 3. Exemples avant / après
+
+### Les hooks
+
+```php title="Avant : functions.php (exercice de lecture)"
+add_action('wp_head', 'mytheme_meta_description', 1);
+add_filter('the_content', 'mytheme_shine', 10);
+add_filter('body_class', 'mytheme_body_class', 10, 2);
+
+function mytheme_meta_description() { /* … */ }
+
+function mytheme_shine($content) {
+    return str_replace('ugly', 'shiny', $content);
+}
+
+function mytheme_body_class($classes, $css_class) {
+    $classes[] = 'has-js';
+    return $classes;
+}
+```
+
+```php title="Après : app/Cms/Hooks/Seo.php"
+<?php
+
+namespace App\Cms\Hooks;
+
+use Pollora\Attributes\Action;
+use Pollora\Attributes\Filter;
+
+class Seo
+{
+    #[Action('wp_head', priority: 1)]
+    public function metaDescription(): void
+    {
+        // …
+    }
+
+    #[Filter('the_content')]
+    public function shine(string $content): string
+    {
+        return str_replace('ugly', 'shiny', $content);
+    }
+
+    #[Filter('body_class')]
+    public function bodyClass(array $classes, array $cssClass): array
+    {
+        $classes[] = 'has-js';
+
+        return $classes;
+    }
+}
+```
+
+Trois choses à recopier **exactement** : le nom du hook, la priorité (`priority:` quand elle n'est pas 10) et le nombre d'arguments, qui ne se déclare plus : c'est le nombre de paramètres de la méthode. `bodyClass()` en déclare deux, elle reçoit les deux valeurs de `body_class`.
+
+Générez la classe plutôt que de l'écrire à la main, et regardez ce que la découverte en dit :
+
+<TerminalReplay capture="make-filter" />
+
+Le compte des hooks est passé de 3 (c'est la valeur de `pollora status` sur un projet neuf, voir plus bas) à 4 : la découverte a trouvé la classe générée sans qu'on l'enregistre nulle part.
+
+### Post type et taxonomie
+
+```php title="Avant : functions.php (exercice de lecture)"
+add_action('init', function () {
+    register_post_type('book', [
+        'labels'       => [/* vingt clés */],
+        'public'       => true,
+        'has_archive'  => 'books',
+        'rewrite'      => ['slug' => 'books', 'with_front' => false],
+        'supports'     => ['title', 'editor', 'excerpt', 'thumbnail'],
+        'show_in_rest' => true,
+    ]);
+
+    register_taxonomy('genre', ['book'], [
+        'hierarchical' => true,
+        'show_in_rest' => true,
+        'rewrite'      => ['slug' => 'genre'],
+    ]);
+});
+```
+
+```php title="Après : app/Cms/PostTypes/Book.php"
+#[PostType('book', textDomain: 'my-theme')]
+#[PublicPostType]
+#[HasArchive('books')]
+#[Rewrite(['slug' => 'books', 'with_front' => false])]
+#[Supports(['title', 'editor', 'excerpt', 'thumbnail'])]
+#[ShowInRest]
+class Book {}
+```
+
+```php title="Après : app/Cms/Taxonomies/Genre.php"
+#[Taxonomy('genre', objectType: 'book', textDomain: 'my-theme')]
+#[Hierarchical]
+#[ShowInRest]
+#[Rewrite(['slug' => 'genre'])]
+class Genre {}
+```
+
+Le tableau `labels` disparaît : Pollora génère les libellés à partir du singulier et du pluriel. Si vos libellés existants sont traduits, gardez-les dans `withArgs()`, qui accepte `__()` ; `#[Labels]` n'accepte que des constantes. Pour un argument sans attribut dédié, `withArgs()` renvoie un tableau fusionné dans l'enregistrement.
+
+Les URL doivent rester celles du site : **recopiez le `slug` de `rewrite`** tel quel. Comme pour tout nouveau post type, visitez Réglages › Permaliens (ou `wp rewrite flush`) pour reconstruire les règles.
+
+### Meta
+
+```php title="Avant : functions.php (exercice de lecture)"
+register_post_meta('event', 'capacity', ['type' => 'integer', 'single' => true, 'show_in_rest' => true]);
+
+$capacity = (int) get_post_meta($id, 'capacity', true);
+$soldOut  = (bool) get_post_meta($id, 'sold_out', true);
+```
+
+```php title="Après : app/Cms/PostTypes/Event.php"
+#[PostType('event')]
+class Event
+{
+    #[Meta(showInRest: true)]
+    public int $capacity = 0;
+
+    #[Meta(showInRest: true)]
+    public bool $soldOut = false;       // clé : sold_out
+}
+```
+
+```php
+$event = Meta::of(Event::class, $postId);
+$event->capacity;   // int
+$event->soldOut;    // bool
+```
+
+La clé stockée est le nom de la propriété en snake_case. **Une clé existante qui n'est pas en snake_case** (comme `_event_internal_ref`) se garde avec `#[Meta(key: '…')]`. `get_post_meta($id, 'capacity', true)` continue de renvoyer la chaîne stockée : le code qui n'a pas encore été migré fonctionne toujours.
+
+<Aside type="caution" title="Les valeurs déjà en base">
+Une valeur qui ne se lit pas dans son type (`"beaucoup"` pour un `int`, une date dans un format ancien) se lit comme la **valeur par défaut** de la propriété, sans erreur : la page affiche le défaut. Avant de migrer des meta existantes, lancez `php artisan pollora:meta:audit` : il lit les valeurs stockées, nomme celles qui ne passent pas, et sort en code 1 s'il en trouve.
+</Aside>
+
+### Rôles
+
+```php title="Avant : functions.php (exercice de lecture)"
+add_role('event_manager', 'Event manager', get_role('author')->capabilities);
+
+add_action('admin_init', function () {
+    $editor = get_role('editor');
+    $editor->add_cap('moderate_comments');
+    $editor->remove_cap('edit_theme_options');
+});
+```
+
+```php title="Après : app/Cms/Roles/EventManager.php et EditorAdjustments.php"
+#[Role('event_manager', label: 'Event manager', inherits: 'author')]
+final class EventManager {}
+
+#[ModifyRole('editor')]
+#[Grants('moderate_comments')]
+#[Without('edit_theme_options')]
+final class EditorAdjustments {}
+```
+
+`add_role()` écrit le rôle en base **une fois**, puis ne fait plus rien : sur un projet existant, le rôle est déjà stocké. Pour ne pas le réécrire de mémoire, laissez Pollora le convertir :
+
+```bash
+php artisan pollora:roles:import event_manager --inherits=author
+```
+
+La commande génère la classe `#[Role]` dans `app/Cms/Roles` ; relisez-la avant de la valider (une capacité sensible reçoit `allowSensitive: true` et une note). Une fois la classe déployée, **le code possède le rôle** et la copie stockée est ignorée. Les rôles de base (`editor`, `author`…) ne se redéclarent pas : c'est `#[ModifyRole]`.
+
+### AJAX, REST et planification
+
+```php title="Avant : functions.php (exercice de lecture)"
+add_action('wp_ajax_load_more', 'mytheme_load_more');
+add_action('wp_ajax_nopriv_load_more', 'mytheme_load_more');
+
+add_action('rest_api_init', function () {
+    register_rest_route('app/v1', 'events/(?P<id>\d+)', [
+        'methods'             => 'GET',
+        'callback'            => 'mytheme_event',
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+wp_schedule_event(time(), 'daily', 'mytheme_cleanup');
+add_action('mytheme_cleanup', 'mytheme_cleanup_handler');
+```
+
+```php title="Après"
+class LoadMore
+{
+    #[Ajax('load_more', access: AjaxAccess::ALL)]   // wp_ajax_ + wp_ajax_nopriv_
+    public function handle(): void { /* … */ }
+}
+
+#[WpRestRoute('app/v1', 'events/(?P<id>\\d+)', permissionCallback: Everyone::class)]
+class EventAPI
+{
+    #[Method('GET')]
+    public function show(int $id): array { /* … */ }
+}
+
+class Maintenance
+{
+    #[Schedule(Every::DAY, hook: 'mytheme_cleanup')]
+    public function cleanup(): void { /* … */ }
+}
+```
+
+- **AJAX.** Par défaut `#[Ajax]` ne vise que les utilisateurs connectés (`wp_ajax_*`). Les deux lignes `wp_ajax_` et `wp_ajax_nopriv_` du code d'origine se traduisent par `AjaxAccess::ALL` ; `AjaxAccess::GUEST` ne vise que les invités. Ouvrir à tous est une décision : ne la prenez que si le code d'origine enregistrait bien les deux. La documentation ne décrit pas de contrôle de nonce automatique : gardez celui de votre code.
+- **REST.** `'permission_callback' => '__return_true'` devient `Everyone::class` : la permission est écrite en toutes lettres. Depuis `pollora/wp-rest` 2.0 (framework 13.39.3), une route déclarée avec `#[WpRestRoute]` **sans permission est refusée** (`rest_forbidden`, 401 pour un visiteur, 403 pour un connecté). Les paramètres de l'URL (`id`) arrivent dans les paramètres de la méthode, par leur nom.
+- **Planification.** `hook:` garde le nom de hook d'origine. Sans lui, le nom est généré à partir de la classe et de la méthode (`maintenance_cleanup`) : un événement déjà planifié sous l'ancien nom ne serait plus rattaché à la méthode. Après migration, `pollora schedule:list` montre ce qui est planifié.
+
+### Options
+
+```php
+// Avant
+$colors = get_option('theme_colors', []);
+update_option('theme_colors', $colors);
+
+// Après
+$colors = Option::get('theme_colors', []);
+Option::update('theme_colors', $colors);
+```
+
+La facade `Option` se lit comme celle de Laravel et reste compatible avec les options WordPress (même table `wp_options`, sérialisation et chargement automatique conservés, les plugins y accèdent normalement). C'est donc la migration **la moins urgente** : `get_option()` fonctionne toujours, et le gain est surtout dans les tests.
+
+<Aside type="caution" title="Ne changez pas une comparaison en test de vérité">
+La page de documentation migre `get_option('feature_enabled') === 'yes'` en `Option::get('feature_enabled', false)` utilisé comme un booléen. Ce n'est équivalent que si la valeur stockée est un vrai booléen : une chaîne `'no'` est « vraie » en PHP. Si la base contient `'yes'` / `'no'`, gardez la comparaison : `Option::get('feature_enabled') === 'yes'`.
+</Aside>
+
+### Templates, assets et menus
+
+Un fichier `page-about.php` devient `resources/views/page-about.blade.php`, et la hiérarchie de WordPress continue de choisir : `page-about.blade.php`, puis `page.blade.php`, puis `index.blade.php`. Pollora cherche pour chaque candidat de la hiérarchie le fichier `.blade.php` correspondant.
+
+```php title="Avant : page-about.php (exercice de lecture)"
+<?php get_header(); ?>
+<?php while (have_posts()) : the_post(); ?>
+    <h1><?php the_title(); ?></h1>
+    <?php the_content(); ?>
+<?php endwhile; ?>
+<?php get_footer(); ?>
+```
+
+```blade title="Après : resources/views/page-about.blade.php"
+@extends('layouts.app')
+
+@section('content')
+    @posts
+        <h1>@title</h1>
+        @content
+    @endposts
+@endsection
+```
+
+Le `header`/`footer` passent dans un layout qui garde `@wphead` et `@wpfooter` : les plugins et les assets en dépendent. L'en-tête `Template Name:` d'un modèle de page devient un commentaire Blade `{{-- Template Name: Landing page --}}`. Un appel `wp_nav_menu()` se range tel quel dans la vue (la page [Menus](https://pollora.dev/theming/menus/) montre comment y poser des classes Tailwind).
+
+Pour les assets, `wp_enqueue_script()` devient `Asset::add()` :
+
+```php title="app/Providers/AppServiceProvider.php"
+public function boot(): void
+{
+    Asset::add('theme/app', 'js/app.js')
+        ->container('theme')
+        ->useVite()
+        ->toFrontend();
+}
+```
+
+Deux points propres à Vite : un script Vite est enregistré comme **module de script** WordPress, pas comme script classique, et ses `dependencies()`, `localize()` et `inline()` vont sur un script compagnon (`{handle}-data`) placé dans le `<head>`. Un ancien `wp_localize_script()` devient `->localize()`. Et les assets se déclarent **dans un service provider, pas dans une classe de hook**.
+
+## 4. La méthode
+
+Pour un projet existant, on ne réécrit pas : on déplace une **préoccupation** à la fois (les hooks SEO, puis les post types, puis les rôles…), et on s'arrête à chaque fois sur un site qui marche.
+
+**1. Inventaire.** Avant de toucher au code, mesurez ce que Pollora voit déjà et ce que le code déclare encore à la main :
+
+<TerminalReplay capture="status" />
+
+`pollora status` donne le compte de ce qui est enregistré **par la découverte** : post types, taxonomies, hooks, routes REST, tâches planifiées. Les listes détaillées :
+
+```bash
+php artisan discovery:run --discovery=hooks   # le compte des hooks découverts
+pollora meta:list                             # les meta typées
+pollora roles:list                            # les rôles, et d'où chacun vient
+pollora schedule:list                         # les événements planifiés
+```
+
+Ce que ces commandes ne montrent pas, c'est l'**ancien** code : pour cela, cherchez-le (`grep -rn "add_action(\|add_filter(\|register_post_type(" .`). L'inventaire, c'est la liste des appels à migrer, rangée par préoccupation.
+
+**2. Une préoccupation, un commit.** Migrez-la complètement : créez les classes, **supprimez** les anciens appels, relancez. Le même nom de hook, la même priorité, la même clé.
+
+**3. Videz le cache de découverte.** Après avoir ajouté un attribut ou déplacé une classe :
+
+```bash
+php artisan discovery:clear
+```
+
+En mode debug (`APP_DEBUG=true`), il n'y a pas de cache persistant et chaque requête analyse le disque ; hors debug, une classe ajoutée après l'écriture du cache n'est pas découverte tant qu'on ne l'a pas vidé. Faites-en un réflexe, et une ligne de votre déploiement.
+
+**4. Le doctor comme barrière.**
+
+<TerminalReplay capture="doctor" />
+
+`pollora doctor` ne sort en erreur (code 1) que pour une **erreur**, pas pour un avertissement : il peut servir de barrière en CI entre deux étapes. Il attrape ce que le site ne dit pas : une classe sur le disque que le cache ignore, une déclaration de rôle ou de meta refusée. **Avant et après** chaque étape, comparez aussi le compte de `pollora status` : les hooks migrés doivent y apparaître, les post types aussi.
+
+**5. Vérifiez le site, pas seulement les commandes.** Chargez la page, l'archive, une requête REST, l'écran d'administration concerné. Un hook qui ne se déclenche pas ne produit pas d'erreur.
+
+## 5. Les pièges d'une migration à la main
+
+### Le filtre qui ne renvoie plus rien
+
+Un filtre change une valeur et la renvoie. En déplaçant une fonction dans une méthode, on perd facilement le `return`, ou on lui donne un type de retour `void` parce que le corps ressemble à une action.
+
+<SpotTheBug
+  id="m13-filter-sans-return"
+  title="Un filtre migré par un agent"
+  language="php"
+  code={`<?php
+
+namespace App\\Cms\\Hooks;
+
+use Pollora\\Attributes\\Filter;
+
+class Content
+{
+    #[Filter('the_content', priority: 10)]
+    public function appendNotice(string $content): void
+    {
+        $content .= '<p>Merci de votre visite.</p>';
+    }
+}`}
+  bugs={[{ line: [10, 12], why: "Un filtre doit renvoyer la valeur modifiée. Ici la méthode est typée void et ne renvoie rien : WordPress reçoit null à la place du contenu de l'article." }]}
+  fix={{
+    question: "Quelle correction est la bonne ?",
+    options: [
+      "Garder void et faire un echo du contenu",
+      "Typer la méthode : string et finir par return $content . '<p>Merci de votre visite.</p>';",
+      "Passer l'attribut en #[Action('the_content')]",
+    ],
+    answer: 1,
+    why: "#[Filter] attend une valeur en retour. Un #[Action] n'est pas un filtre : le hook the_content se déclenche avec apply_filters(), la valeur renvoyée est celle que WordPress affiche.",
+  }}
+/>
+
+### La priorité et les arguments perdus
+
+La priorité et le nombre d'arguments sont dans la ligne `add_filter()` d'origine. Un attribut sans `priority:` vaut 10, et la signature décide des arguments : on perd l'un ou l'autre en recopiant trop vite.
+
+<SpotTheBug
+  id="m13-priorite-arguments"
+  title="Un diff de migration"
+  language="diff"
+  variant="diff"
+  code={`diff --git a/functions.php b/functions.php
+--- a/functions.php
++++ b/functions.php
+@@ -12,5 +12,0 @@
+-add_filter('the_title', 'mytheme_event_title', 20, 2);
+-
+-function mytheme_event_title($title, $id) {
+-    return get_post_type($id) === 'event' ? 'Event: '.$title : $title;
+-}
+diff --git a/app/Cms/Hooks/EventTitles.php b/app/Cms/Hooks/EventTitles.php
+new file mode 100644
+--- /dev/null
++++ b/app/Cms/Hooks/EventTitles.php
+@@ -0,0 +1,14 @@
++<?php
++
++namespace App\\Cms\\Hooks;
++
++use Pollora\\Attributes\\Filter;
++
++class EventTitles
++{
++    #[Filter('the_title')]
++    public function prefix(string $title): string
++    {
++        return get_post_type($id) === 'event' ? 'Event: '.$title : $title;
++    }
++}`}
+  bugs={[
+    { line: 23, why: "La priorité 20 de l'ancien add_filter() a disparu : l'attribut vaut 10, le préfixe ne s'applique plus après les autres filtres de priorité 10." },
+    { line: 24, why: "L'ancien add_filter() déclarait 2 arguments (le titre et l'ID). La méthode n'en prend qu'un : $id n'existe pas, et la ligne suivante lit une variable indéfinie." },
+  ]}
+  fix={{
+    question: "Quelle paire de lignes corrige les deux erreurs ?",
+    options: [
+      "#[Filter('the_title', priority: 20)] et prefix(string $title, int $id): string",
+      "#[Filter('the_title', accepted_args: 2)] et prefix(string $title, int $id): string",
+      "#[Filter('the_title', priority: 20)] et prefix(string $title): string, avec global $id",
+    ],
+    answer: 0,
+    why: "Il n'y a pas de nombre d'arguments à déclarer dans l'attribut : Pollora compte les paramètres de la signature. La priorité, elle, se recopie avec priority:.",
+  }}
+/>
+
+### L'ancien enregistrement oublié
+
+Un agent qui crée la classe `#[PostType]` oublie parfois de supprimer l'appel d'origine : le contenu est alors déclaré deux fois. La documentation ne dit pas laquelle des deux déclarations l'emporte, et c'est précisément le problème : deux sources de vérité à garder d'accord.
+
+<SpotTheBug
+  id="m13-ancien-enregistrement"
+  title="Le diff est-il complet ?"
+  language="diff"
+  variant="diff"
+  code={`diff --git a/app/Cms/PostTypes/Event.php b/app/Cms/PostTypes/Event.php
+new file mode 100644
+--- /dev/null
++++ b/app/Cms/PostTypes/Event.php
+@@ -0,0 +1,14 @@
++<?php
++
++namespace App\\Cms\\PostTypes;
++
++use Pollora\\Attributes\\PostType;
++use Pollora\\Attributes\\PostType\\HasArchive;
++use Pollora\\Attributes\\PostType\\PublicPostType;
++use Pollora\\Attributes\\PostType\\Supports;
++
++#[PostType('event')]
++#[PublicPostType]
++#[HasArchive]
++#[Supports(['title', 'editor'])]
++class Event {}
+diff --git a/functions.php b/functions.php
+--- a/functions.php
++++ b/functions.php
+@@ -20,6 +20,6 @@
+ add_action('init', function () {
+     register_post_type('event', [
+         'public' => true,
+         'has_archive' => true,
+         'supports' => ['title', 'editor'],
+     ]);
+ });`}
+  bugs={[{ line: 25, why: "L'appel register_post_type('event', …) est toujours là, à côté de la classe #[PostType('event')] : le type est déclaré deux fois. La migration d'un contenu supprime l'ancien enregistrement dans le même commit." }]}
+  fix={{
+    question: "Que faut-il ajouter au diff ?",
+    options: [
+      "Rien : l'attribut remplace automatiquement l'ancien appel",
+      "La suppression du bloc add_action('init', …) de functions.php",
+      "Un #[SkipDiscovery] sur la classe Event",
+    ],
+    answer: 1,
+    why: "Pollora ne désactive pas un enregistrement écrit à la main. Retirez-le dans le même commit, puis vérifiez avec pollora status que le type est compté une fois.",
+  }}
+/>
+
+### La route REST sans permission
+
+`'permission_callback' => '__return_true'` dit en toutes lettres « route publique ». En migrant, l'agent peut simplement ne pas l'écrire, ou, pire, oublier que la route d'origine contrôlait un droit.
+
+<SpotTheBug
+  id="m13-rest-sans-permission"
+  title="Une route REST migrée"
+  language="php"
+  code={`<?php
+
+namespace App\\Cms\\Api;
+
+use Pollora\\Attributes\\WpRestRoute;
+use Pollora\\Attributes\\WpRestRoute\\Method;
+use WP_REST_Request;
+
+#[WpRestRoute(namespace: 'app/v1', route: 'subscribers/(?P<id>[0-9]+)')]
+class SubscriberAPI
+{
+    #[Method('DELETE')]
+    public function delete(WP_REST_Request $request, int $id): array
+    {
+        wp_delete_user($id);
+
+        return ['deleted' => $id];
+    }
+}`}
+  bugs={[{ line: 9, why: "Aucune permission n'est déclarée. Depuis pollora/wp-rest 2.0, la route est refusée (rest_forbidden) ; avant, elle restait publique. Dans les deux cas, ce n'est pas ce que le code d'origine voulait dire, et ici elle supprime des utilisateurs." }]}
+  fix={{
+    question: "Que mettre sur l'attribut ?",
+    options: [
+      "permissionCallback: Everyone::class",
+      "permissionCallback: IsLoggedIn::class",
+      "permissionCallback: new Can('delete_users')",
+    ],
+    answer: 2,
+    why: "Supprimer un utilisateur demande une capacité, pas seulement une connexion. Can prend des arguments, on passe donc une instance. Everyone est réservé aux routes publiques voulues.",
+  }}
+/>
+
+### Les assets dans une classe de hook
+
+Le réflexe de l'agent est de recopier `add_action('wp_enqueue_scripts', …)` en `#[Action('wp_enqueue_scripts')]`. La documentation de l'`Asset` est explicite : on déclare les assets dans un service provider.
+
+<SpotTheBug
+  id="m13-assets-dans-un-hook"
+  title="Enregistrer un script"
+  language="php"
+  code={`<?php
+
+namespace App\\Cms\\Hooks;
+
+use Pollora\\Attributes\\Action;
+use Pollora\\Support\\Facades\\Asset;
+
+class Assets
+{
+    #[Action('wp_enqueue_scripts')]
+    public function enqueue(): void
+    {
+        Asset::add('theme/app', 'js/app.js')
+            ->container('theme')
+            ->useVite()
+            ->toFrontend();
+    }
+}`}
+  bugs={[{ line: [10, 13], why: "Les assets se déclarent dans un service provider, pas dans une classe de hook : c'est le provider qui garantit leur mise en file par wp_enqueue_scripts. Le #[Action('wp_enqueue_scripts')] recopié de l'ancien code n'est pas la bonne forme." }]}
+  fix={{
+    question: "Où déplacer l'appel Asset::add() ?",
+    options: [
+      "Dans la méthode boot() d'un service provider",
+      "Dans un second #[Action] de priorité plus basse",
+      "Dans functions.php, en gardant wp_enqueue_script()",
+    ],
+    answer: 0,
+    why: "C'est ce que dit la documentation d'Assets & Vite. Le provider du thème par défaut (AssetServiceProvider) fait déjà cela.",
+  }}
+/>
+
+### Les types que WordPress passe vraiment
+
+Ce point vient de PHP, pas de la documentation de Pollora. Une fonction WordPress sans types accepte tout ; une méthode `string $content` refuse ce qui n'est pas une chaîne. Un filtre peut recevoir autre chose que ce que son nom promet (`null`, `false`, un tableau, quand un plugin a touché la valeur avant vous) : le `TypeError` qui en résulte arrête la page là où l'ancien code continuait. Avec `declare(strict_types=1)`, les types de retour deviennent aussi stricts dans votre fichier. En cas de doute, élargissez le type (`mixed`, `?string`) et convertissez à l'intérieur.
+
+### Les pièges de la découverte
+
+La méthode doit être **publique**, la classe non abstraite, l'attribut importé de `Pollora\Attributes`, et la classe constructible par le conteneur : sinon ses hooks sont ignorés, sans arrêter la requête. Si le compte de `discovery:run --discovery=hooks` ne bouge pas, c'est dans cet ordre qu'on cherche. Enfin, une classe qui ne doit pas être découverte (un helper, un reste de l'ancien code) reçoit `#[SkipDiscovery]`.
+
+## 6. Avec Claude Code et Nectar
+
+Une migration est un travail d'inventaire puis de petites modifications répétées : exactement ce qu'un agent fait bien **s'il est tenu en laisse**.
+
+1. **Inventaire d'abord, sans rien modifier.** « Liste tous les `add_action`, `add_filter`, `register_post_type`, `register_taxonomy`, `add_role`, `wp_ajax_`, `register_rest_route` et `wp_schedule_event` du thème et des plugins sur mesure, rangés par préoccupation. Ne modifie rien. »
+2. **Une préoccupation par demande, un diff relu.** « Migre les hooks SEO de `functions.php` vers `app/Cms/Hooks/Seo.php`. Garde les noms de hook et les priorités. Supprime les anciens appels. » Relisez le diff avec la liste de la section 5 : `return` des filtres, priorité, arguments, ancien code supprimé, permission.
+3. **Faites vérifier l'agent par les outils, pas par sa parole.** Avec Nectar branché (module 9), `registered_hooks` doit lister les nouvelles méthodes avec leur classe et leur priorité ; `discovered_components` donne les comptes par type ; `post_types_info` montre la configuration réelle d'un type migré. Puis `pollora doctor`.
+4. **Ne vous fiez pas à `registered_hooks` pour les plugins.** Il ne liste que les hooks déclarés avec les attributs de Pollora, via la découverte : un `add_action()` ajouté par un plugin tiers n'y figure pas. Pour « pourquoi mon filtre n'agit pas », l'agent doit aussi lire le code du plugin.
+5. **Posez la règle une fois.** Dans le fichier de consignes du projet (module 9) : « une migration ne change pas le comportement : mêmes hooks, mêmes priorités, mêmes clés ; un commit par préoccupation ; `discovery:clear` puis `pollora doctor` avant de conclure ».
+
+<Aside type="tip" title="Avec Claude Code">
+Le serveur MCP de la documentation (module 9) évite à l'agent d'inventer un attribut : demandez-lui de vérifier le nom et les paramètres dans la page concernée avant d'écrire. Un attribut qui n'existe pas dans la documentation n'existe pas.
+</Aside>
+
+## Vérifiez ce que vous avez retenu
+
+<Quiz title="Une ligne add_filter">
+Vous migrez `add_filter('the_title', 'f', 20, 2)`. Que doit contenir la méthode ?
+
+- [ ] `#[Filter('the_title', priority: 20, args: 2)]`
+  > Il n'y a pas de nombre d'arguments dans l'attribut.
+- [x] `#[Filter('the_title', priority: 20)]` et deux paramètres dans la signature
+- [ ] `#[Filter('the_title')]` : la priorité par défaut convient toujours
+  > La priorité d'origine se recopie : par défaut elle vaut 10, et l'ordre entre filtres change.
+
+La priorité se déclare, le nombre d'arguments se déduit de la signature.
+
+</Quiz>
+
+<Quiz title="Une route publique">
+Le code d'origine déclare `'permission_callback' => '__return_true'`. Que devient-il dans `#[WpRestRoute]` ?
+
+- [ ] Rien : sans permission, la route reste publique
+  > Depuis pollora/wp-rest 2.0, une route sans permission est refusée (`rest_forbidden`).
+- [x] `permissionCallback: Everyone::class`
+- [ ] `permissionCallback: IsAdmin::class`
+  > Ce serait changer le comportement : la route d'origine était publique.
+
+Une migration ne change pas le comportement, mais elle l'écrit en toutes lettres.
+
+</Quiz>
+
+<Quiz title="Ce qui reste">
+Le thème appelle `wp_nav_menu()` dans `header.php`. Que devient cet appel dans la migration ?
+
+- [ ] Il est remplacé par une facade de Pollora
+  > Pollora ne remplace pas `wp_nav_menu()`.
+- [x] Il est conservé tel quel, dans le layout Blade
+- [ ] Il est déplacé dans une classe `#[Action]`
+  > Un menu s'affiche dans le template ; ce n'est pas un hook à déclarer.
+
+On migre ce qui déclare quelque chose à WordPress, pas ce qui est WordPress.
+
+</Quiz>
+
+<Quiz title="Après chaque étape">
+Vous venez de migrer les hooks SEO dans une classe de `app/Cms/Hooks`. Que faites-vous avant de passer à la suite ?
+
+- [ ] Rien : l'auto-découverte enregistre tout
+  > Un hook qui ne se déclenche pas ne produit pas d'erreur ; il faut le constater.
+- [x] `php artisan discovery:clear`, `pollora doctor`, puis une vérification du site
+- [ ] Migrer aussi les hooks des plugins pour avoir un inventaire complet
+  > Les hooks des plugins appartiennent aux plugins : ils ne se migrent pas.
+
+Chaque étape laisse un site qui marche, sinon on ne sait plus laquelle a cassé.
+
+</Quiz>
+
+<Quiz title="Les options">
+Le code d'origine contient `if (get_option('feature_enabled') === 'yes')`. Comment le migrer vers la facade `Option` ?
+
+- [ ] `if (Option::get('feature_enabled', false))`
+  > Une chaîne `'no'` est « vraie » en PHP : le test change de sens si la base contient `'yes'` / `'no'`.
+- [x] `if (Option::get('feature_enabled') === 'yes')`
+- [ ] Il faut d'abord supprimer l'option de la base
+  > L'option reste dans `wp_options`, la facade lit la même table.
+
+La facade est compatible avec les options WordPress : la valeur stockée est la même.
+
+</Quiz>
+
+<QuizResults />
+
+## Pour aller plus loin
+
+- [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/) : le passage de `add_action` aux attributs, pas à pas
+- [Custom post types and taxonomies with PHP attributes](https://pollora.dev/guides/custom-post-types-php-attributes/) : de `register_post_type` à la classe
+- [Typed Meta](https://pollora.dev/content/typed-meta/) : `pollora:meta:audit` pour les données existantes
+- [Roles & Capabilities](https://pollora.dev/advanced/roles-capabilities/) : `pollora:roles:import`, `prune` et `dump`
+- [REST API](https://pollora.dev/advanced/rest-api/) : permissions, et le filtre `pollora/wp-rest/private_by_default` pour les sites en cours de migration
+- [Blade templates in WordPress](https://pollora.dev/guides/blade-templates-wordpress/) : la hiérarchie de templates vers Blade
+- [Auto-découverte](https://pollora.dev/core-concepts/auto-discovery/) : cache, exclusions et dépannage

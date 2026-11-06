@@ -1,0 +1,25 @@
+{
+	"id": "make-filter",
+	"title": "pollora make:filter ContentFilters, then the hooks discovery count, on a freshly installed lab project (Pollora 13.40, no exercise file)",
+	"recordedWith": {
+		"pollora": "13.40.0",
+		"date": "2026-11-06"
+	},
+	"steps": [
+		{
+			"command": "pollora make:filter ContentFilters",
+			"accept": [
+				"php artisan pollora:make:filter ContentFilters"
+			],
+			"output": "\u001b[32mCreating Filter in app: ~/project/app\u001b[39m\n\n  \u001b[37;42m SUCCESS \u001b[39;49m Filter \u001b[1m[app/Cms/Hooks/ContentFilters.php]\u001b[22m created successfully.",
+			"exitCode": 0,
+			"hint": "The generator is `pollora make:filter`, followed by the class name."
+		},
+		{
+			"command": "php artisan discovery:run --discovery=hooks",
+			"output": "\u001b[32mStarting Pollora Discovery Process...\u001b[39m\n💾 Cache Status: \u001b[33mDisabled\u001b[39m (debug mode or NullDiscoverCacheDriver)\n   i️  Discovery will run without persistent caching for better development experience\n\n\u001b[32mRunning discovery: hooks\u001b[39m\n\u001b[32mFound 4 items for 'hooks'\u001b[39m\n\n \u001b[32mApply discovered items? (yes/no)\u001b[39m [\u001b[33myes\u001b[39m]:\n > \u001b[32m✓ Discovery applied\u001b[39m\n\n\u001b[32mDiscovery Summary:\u001b[39m\n\u001b[32m═════════════════\u001b[39m\n• service_providers: 3 items\n• taxonomies: 0 items\n• post_types: 0 items\n• meta: 0 items\n• roles: 0 items\n• block_bindings: 0 items\n• wp_rest_routes: 0 items\n• wp_cli_commands: 0 items\n• hooks: 4 items\n• ajax: 0 items\n• ability: 0 items\n• schedules: 0 items\n\n\u001b[32mScanned 2 discovery locations\u001b[39m\n\u001b[32mDiscovery process completed successfully!\u001b[39m",
+			"exitCode": 0,
+			"hint": "Count what discovery finds for hooks: `php artisan discovery:run --discovery=hooks`."
+		}
+	]
+}

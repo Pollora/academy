@@ -1,0 +1,28 @@
+{
+  "id": "make-filter",
+  "title": "pollora make:filter ContentFilters, then the hooks discovery count, on a freshly installed lab project (Pollora 13.40, no exercise file)",
+  "isolate": [
+    "app/Cms/Bindings",
+    "app/Cms/Hooks",
+    "app/Cms/Roles",
+    "app/Cms/PostTypes/Event.php",
+    "app/Http/Controllers/ContactController.php"
+  ],
+  "setup": [
+    "mkdir -p app/Cms/Hooks"
+  ],
+  "steps": [
+    {
+      "command": "pollora make:filter ContentFilters",
+      "accept": ["php artisan pollora:make:filter ContentFilters"],
+      "hint": "The generator is `pollora make:filter`, followed by the class name."
+    },
+    {
+      "command": "php artisan discovery:run --discovery=hooks",
+      "hint": "Count what discovery finds for hooks: `php artisan discovery:run --discovery=hooks`."
+    }
+  ],
+  "teardown": [
+    "rm -f app/Cms/Hooks/ContentFilters.php"
+  ]
+}
