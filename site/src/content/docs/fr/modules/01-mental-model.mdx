@@ -50,6 +50,19 @@ Les routes sont essayées dans l'ordre de déclaration. Une route de template (`
 - **REST (`/wp-json/…`)** : WordPress répond pendant le démarrage, avant le routeur.
 - **Routes `/api/…`** : mode léger, WordPress se charge **sans plugins** par défaut (`wordpress.api_plugins`). Les réponses passent d'environ 1,3 s à 100 ms.
 
+## Les commandes du cours
+
+Les commandes de Pollora sont des commandes Artisan nommées `pollora:…` (par exemple `pollora:doctor`). Vous pouvez les lancer de deux façons, qui font la même chose :
+
+| Vous tapez | Équivaut à |
+|---|---|
+| `pollora doctor` | `php artisan pollora:doctor` |
+| `pollora make:block hero-banner` | `php artisan pollora:make:block hero-banner` |
+
+Dans un projet, le CLI Pollora relaie `pollora <nom>` vers `php artisan pollora:<nom>`, **dans le conteneur DDEV s'il y en a un**. Le cours écrit donc `pollora <nom>`. Sans le CLI, tapez la forme `php artisan pollora:<nom>`.
+
+Les autres commandes, celles de Laravel ou d'un paquet (`discovery:clear`, `boost:update`, `queue:work`, `event:list`), ne passent pas par le CLI : le cours les écrit `php artisan …`, et dans un projet DDEV elles se lancent avec `ddev exec php artisan …`.
+
 ## Vérifiez ce que vous avez retenu
 
 <Quiz title="Qui répond ?">

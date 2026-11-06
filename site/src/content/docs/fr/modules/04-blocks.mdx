@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/) et [Block Bindings](https://pollora.dev/blocks/block-bindings/).
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Gutenberg Blocks](https://pollora.dev/blocks/gutenberg-blocks/) et [Block Bindings](https://pollora.dev/blocks/block-bindings/). Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 60 min · Prérequis : les modules 1 et 2, et les bases de Gutenberg (qu'est-ce qu'un bloc, `block.json`).**
@@ -33,7 +33,7 @@ resources/views/blocks/hero-banner/
 ├── editor.css / style.css / view.js
 ```
 
-On le génère avec `php artisan pollora:make:block hero-banner --theme`. Il faut ensuite un build Vite (`npm install && npm run build`, ou `npm run dev` pour le rechargement à chaud) : la commande refuse un thème ou un plugin sans `package.json` ni `vite.config.js`.
+On le génère avec `pollora make:block hero-banner --theme`. Il faut ensuite un build Vite (`npm install && npm run build`, ou `npm run dev` pour le rechargement à chaud) : la commande refuse un thème ou un plugin sans `package.json` ni `vite.config.js`.
 
 Les blocs sont **dynamiques par défaut** : `render.blade.php` les rend à chaque requête, et leur balisage n'est pas stocké dans `post_content`. Changer le template met donc à jour tous les blocs existants, sans l'erreur « This block contains unexpected or invalid content ».
 
@@ -139,7 +139,7 @@ N'importe qui peut éditer un article peut y lier n'importe quelle source : chaq
 
 ### Contrôler
 
-Un binding qui ne peut pas afficher sa valeur ne produit aucune erreur : le bloc garde son contenu enregistré. `php artisan pollora:doctor` lit les bindings écrits dans les templates, parties et motifs du thème, et nomme le fichier, le bloc et la raison. `php artisan pollora:binding:list` montre ce qui est liable.
+Un binding qui ne peut pas afficher sa valeur ne produit aucune erreur : le bloc garde son contenu enregistré. `pollora doctor` lit les bindings écrits dans les templates, parties et motifs du thème, et nomme le fichier, le bloc et la raison. `pollora binding:list` montre ce qui est liable.
 
 ## Vérifiez ce que vous avez retenu
 

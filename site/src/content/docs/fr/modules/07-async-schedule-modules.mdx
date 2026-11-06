@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Les faits viennent de la documentation officielle ([actions asynchrones](https://pollora.dev/hooks/async-actions/), [planification](https://pollora.dev/advanced/scheduling/), [modules](https://pollora.dev/advanced/modules/)) : en cas de doute, c'est elle qui fait foi.
+Testé avec Pollora 13.40. Les faits viennent de la documentation officielle ([actions asynchrones](https://pollora.dev/hooks/async-actions/), [planification](https://pollora.dev/advanced/scheduling/), [modules](https://pollora.dev/advanced/modules/)) : en cas de doute, c'est elle qui fait foi. Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 50 min · Prérequis : les modules 1 à 3 (attributs, hooks et événements), et des notions de files d'attente Laravel.**
@@ -50,7 +50,7 @@ Supprimer la ligne `#[Async]` rend l'action de nouveau synchrone. Seules les **a
 Pour générer la classe :
 
 ```bash
-php artisan pollora:make:action SyncEventToCrm --hook=save_post_event --async
+pollora make:action SyncEventToCrm --hook=save_post_event --async
 ```
 
 ### Quatre règles à connaître d'abord
@@ -122,7 +122,7 @@ Async::assertNotDispatched(Indexer::class);
 `Async::fake()` enregistre ce qui serait mis en file sans l'exécuter ; `Async::runDispatched()` exécute ensuite ce qui a été enregistré. Sans `fake()`, `HOOKS_ASYNC_DRIVER=sync` exécute tout immédiatement, pratique pour les tests de bout en bout et dans le `.env` d'un développeur.
 
 ```bash
-php artisan pollora:async:list           # --json disponible
+pollora async:list           # --json disponible
 ```
 
 La commande liste chaque action asynchrone (hook, handler, driver, délai, tentatives…), les drivers disponibles et le driver par défaut avec son origine. `pollora:doctor` signale aussi un `#[Async]` ignoré : une déclaration qui ne peut pas être honorée est journalisée et l'action s'exécute **de façon synchrone**.
@@ -166,7 +166,7 @@ Le driver est choisi dans `config/schedule.php` ou avec `POLLORA_SCHEDULE_DRIVER
 
 Comme pour l'asynchrone, `DISABLE_WP_CRON` fait que, **sans cron système** (driver `wp-cron`) ou **sans worker** (driver `laravel`), aucun événement ne se déclenche. Avec `laravel`, il n'y a ni `schedule:run` ni table propre à Pollora : le worker est tout ce qui fait tourner les événements, et `pollora:doctor` signale ceux qui ont plus de dix minutes de retard.
 
-Changer de driver n'envoie que les **nouveaux** événements vers le nouveau driver. Les existants restent où ils sont jusqu'à `php artisan pollora:schedule:migrate` (avec `--dry-run` pour voir). `php artisan pollora:schedule:list` liste les événements.
+Changer de driver n'envoie que les **nouveaux** événements vers le nouveau driver. Les existants restent où ils sont jusqu'à `pollora schedule:migrate` (avec `--dry-run` pour voir). `pollora schedule:list` liste les événements.
 
 <Aside type="caution" title="Piège : l'ancienne option est supprimée">
 L'option `wordpress.use_laravel_scheduler` et son pont ont été retirés, sans période de dépréciation : la définir ne fait plus rien. Pour garder les événements sur la file de Laravel, utilisez `POLLORA_SCHEDULE_DRIVER=laravel` et un worker à la place de `schedule:run`.
@@ -184,7 +184,7 @@ Tout ce qui existe dans `app/` (types de contenu, taxonomies, hooks…) fonction
 ### Créer un module
 
 ```bash
-php artisan pollora:make:module Portfolio
+pollora make:module Portfolio
 ```
 
 La commande récupère le gabarit `module-default`, le nomme, l'active, lance `composer dump-autoload` et construit les assets avec npm. Le module est volontairement minimal : **ni service provider, ni contrôleur, ni routes, ni configuration, ni seeder, ni tests** par défaut. Les classes à attributs placées dans `app/` sont découvertes. Chaque couche s'ajoute avec un drapeau :
@@ -203,8 +203,8 @@ La commande récupère le gabarit `module-default`, le nomme, l'active, lance `c
 Les générateurs de Pollora acceptent `--module` et écrivent dans le module, sous le namespace que son `composer.json` associe à `app/` :
 
 ```bash
-php artisan pollora:make:post-type Project --module=Portfolio
-php artisan pollora:make:block project-card --module=Portfolio
+pollora make:post-type Project --module=Portfolio
+pollora make:block project-card --module=Portfolio
 ```
 
 ### La découverte dans un module

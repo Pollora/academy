@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Reference version">
-Tested with Pollora 13.40. Facts come from the official documentation: [Media Storage](https://pollora.dev/advanced/media/), [WooCommerce](https://pollora.dev/advanced/woocommerce/), [WP Rocket](https://pollora.dev/advanced/wp-rocket/), [Debugging](https://pollora.dev/advanced/debugging/), [Dashboard & Status](https://pollora.dev/advanced/dashboard/), [WordPress Routes](https://pollora.dev/routing/wordpress-routes/) and [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/).
+Tested with Pollora 13.40. Facts come from the official documentation: [Media Storage](https://pollora.dev/advanced/media/), [WooCommerce](https://pollora.dev/advanced/woocommerce/), [WP Rocket](https://pollora.dev/advanced/wp-rocket/), [Debugging](https://pollora.dev/advanced/debugging/), [Dashboard & Status](https://pollora.dev/advanced/dashboard/), [WordPress Routes](https://pollora.dev/routing/wordpress-routes/) and [How Pollora runs WordPress inside Laravel](https://pollora.dev/guides/how-pollora-runs-wordpress-inside-laravel/). Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
 </Aside>
 
 **Duration: 50 min · Prerequisites: module 1 (Route::wp(), auto-discovery).**
@@ -50,8 +50,8 @@ For S3 or a compatible service, also install the Flysystem driver: `composer req
 To move an existing library:
 
 ```bash
-php artisan pollora:media:migrate --from=uploads --to=media             # dry run
-php artisan pollora:media:migrate --from=uploads --to=media --execute   # copy
+pollora media:migrate --from=uploads --to=media             # dry run
+pollora media:migrate --from=uploads --to=media --execute   # copy
 ```
 
 The command can run again after an interruption and never changes the source. `--replace-urls` replaces the old base URL in the database.
@@ -91,21 +91,21 @@ A size is made at upload only if it is `eager()`. The others are made **the firs
 
 - **Local disk**: Nginx and Apache already send a missing file to PHP, nothing to set up.
 - **S3 behind a CDN**: the origin of the CDN for the library is the site (one rule at the CDN).
-- **S3 without a CDN**: there is **no fallback**. Declare the sizes you use `eager()` and run `php artisan pollora:media:thumbs:warm`.
+- **S3 without a CDN**: there is **no fallback**. Declare the sizes you use `eager()` and run `pollora media:thumbs:warm`.
 
 What the URL says is not trusted: the name must be a declared size, the signature the one the site would have made, the original neither private nor a GIF. Otherwise, a `404` that costs nothing. Making sizes is also bounded (`thumbnails.max_pixels`, `concurrency`, `wait`).
 
 ### Or by a service
 
-For a very large library, `thumbnails.driver` (`pollora`, `bunny` or `imgproxy`) hands the sizes to a service. The PHP declaration does not change, only the shape of the URL: a Bunny Optimizer image class, or a signed imgproxy URL that names a preset only. `php artisan pollora:media:thumbs:export --driver=bunny|imgproxy` exports your sizes to the service. With a service, the site makes no file.
+For a very large library, `thumbnails.driver` (`pollora`, `bunny` or `imgproxy`) hands the sizes to a service. The PHP declaration does not change, only the shape of the URL: a Bunny Optimizer image class, or a signed imgproxy URL that names a preset only. `pollora media:thumbs:export --driver=bunny|imgproxy` exports your sizes to the service. With a service, the site makes no file.
 
 ## 3. Signed private files
 
 A media is private when its post meta `_pollora_media_private` is `1`, or when the `pollora/media/is_private` filter says so. It is then served through a **signed URL** that expires after `media.private.expiry` (`+6 hours` by default), sizes and `srcset` included. Nothing in the admin marks a media private: do it from the command line, from code, or by rule.
 
 ```bash
-php artisan pollora:media:visibility 42 --private
-php artisan pollora:media:visibility 42 --public
+pollora media:visibility 42 --private
+pollora media:visibility 42 --public
 ```
 
 The signature is made by the Laravel disk (`temporaryUrl()`), so an object store is needed.
@@ -125,7 +125,7 @@ composer require pollora/woocommerce
 ```
 
 <Aside type="caution" title="Trap: without the package, nothing says so">
-A project that runs WooCommerce **must** install the package. Without it the shop has no Blade templates, no `Route::wp()` conditions (`shop`, `product`, `cart`…), no Coming Soon page and no WooCommerce events, and **nothing reports the error**. `php artisan pollora:doctor` (and Tools › Site Health) warns when WooCommerce is active and the package is missing.
+A project that runs WooCommerce **must** install the package. Without it the shop has no Blade templates, no `Route::wp()` conditions (`shop`, `product`, `cart`…), no Coming Soon page and no WooCommerce events, and **nothing reports the error**. `pollora doctor` (and Tools › Site Health) warns when WooCommerce is active and the package is missing.
 </Aside>
 
 **Blade templates.** WooCommerce looks for a template in the theme, then in its own folder. The package adds the Blade variant of each candidate to the search: `resources/views/woocommerce/single-product.blade.php` answers where `woocommerce/single-product.php` would. Template parts (`wc_get_template_part()`) and `wc_get_template()` resolve the same way.
@@ -220,7 +220,7 @@ composer require --dev pollora/debugbar
 
 It is a development dependency **on purpose**: `composer install --no-dev` leaves it out, so a production deployment never ships it. It runs exactly when Laravel Debugbar does (`DEBUGBAR_ENABLED`, or `APP_DEBUG` when that is not set) and never in the `production` or `testing` environments. To keep Laravel's tabs and drop Pollora's: `DEBUGBAR_POLLORA_ENABLED=false`. REST and admin-ajax requests show up too, thanks to the `phpdebugbar-id` header.
 
-`php artisan pollora:status` says **what is there** (versions, post types, hooks, discovery cache, theme). `php artisan pollora:doctor` says **whether it works**, with the command that fixes it under each problem. It looks for silent failures: a missing core patch, an outdated `patches.lock.json`, `.env` names Pollora does not read, configuration or route caches outside production, a stale discovery cache, missing theme builds, ignored asynchronous actions…
+`pollora status` says **what is there** (versions, post types, hooks, discovery cache, theme). `pollora doctor` says **whether it works**, with the command that fixes it under each problem. It looks for silent failures: a missing core patch, an outdated `patches.lock.json`, `.env` names Pollora does not read, configuration or route caches outside production, a stale discovery cache, missing theme builds, ignored asynchronous actions…
 
 - It exits `1` when a check finds an **error** (warnings exit `0`), so it can gate a deploy or a CI job.
 - `--json` prints the same for scripts.

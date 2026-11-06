@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Version de référence">
-Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Nectar](https://pollora.dev/nectar/overview/), [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/), [Dashboard et statut](https://pollora.dev/advanced/dashboard/) et [Installation](https://pollora.dev/getting-started/installation/).
+Testé avec Pollora 13.40. Faits issus de la documentation officielle : [Nectar](https://pollora.dev/nectar/overview/), [Agents de code IA pour WordPress](https://pollora.dev/guides/ai-coding-agents-wordpress/), [Dashboard et statut](https://pollora.dev/advanced/dashboard/) et [Installation](https://pollora.dev/getting-started/installation/). Commandes : `pollora <nom>` lance `php artisan pollora:<nom>` (voir [Les commandes du cours](/fr/modules/01-mental-model/#les-commandes-du-cours)).
 </Aside>
 
 **Durée : 60 min · Prérequis : le module 9 (Nectar et les agents de code), Claude Code installé, et un projet Pollora sous Git.**
@@ -92,7 +92,7 @@ Côté Claude Code (ce point relève de Claude Code, pas de la documentation Pol
 /mcp__pollora-nectar__upgrade-pollora-v13-32
 ```
 
-Contrôlez aussi la version installée : `php artisan pollora:status` l'affiche, et `php artisan pollora:status --json` donne `framework.current`, utile dans un script.
+Contrôlez aussi la version installée : `pollora status` l'affiche, et `pollora status --json` donne `framework.current`, utile dans un script.
 
 <Aside type="caution" title="Si le prompt n'apparaît pas">
 Vérifiez dans cet ordre : la version (`pollora:status`) est-elle dans la plage ? `APP_ENV` vaut-il `local` ou `development` ? `NECTAR_ENABLED` n'est-il pas à `false` ? Le serveur `pollora-nectar` est-il bien déclaré et démarré ? Ne recopiez pas le texte du prompt à la main : il dépend de la version.
@@ -122,7 +122,7 @@ Lisez le diff comme une revue de code d'un inconnu. Une liste courte :
 
 ```bash
 php artisan discovery:clear
-php artisan pollora:doctor
+pollora doctor
 ```
 
 `pollora:doctor` cherche les pannes **silencieuses**, celles où le site s'affiche et où chaque commande sort en 0 : correctif du noyau WordPress, `patches.lock.json`, fichier `.env`, cache de découverte, build du thème, plugins et modules. Il sort avec le code `1` si un contrôle trouve une erreur (les avertissements sortent en 0), et affiche sous chaque problème la commande qui le corrige. Lancez ensuite la suite de tests, ouvrez le site et `wp-admin`, et, pour une montée depuis 12.x, `wp transient delete --all` (avec DDEV : `ddev exec wp transient delete --all`).
@@ -233,7 +233,7 @@ pollora new upgrade-practice --ver=13.4.0 --git
 
 **Point de contrôle 2 : le prompt est disponible.**
 - `composer require pollora/nectar --dev`, puis `php artisan boost:install`, et `.mcp.json` déclare `pollora-nectar`.
-- `php artisan pollora:status --json` donne un `framework.current` inférieur à 13.32.
+- `pollora status --json` donne un `framework.current` inférieur à 13.32.
 - Dans Claude Code, la liste de `/mcp__pollora-nectar__` contient `upgrade-pollora-v13-32`. Si Composer refuse d'installer Nectar sur cette version, notez le message : c'est un résultat de l'exercice.
 
 **Point de contrôle 3 : lancer la montée de version et relire le diff.**
@@ -244,8 +244,8 @@ pollora new upgrade-practice --ver=13.4.0 --git
 
 ```bash
 php artisan discovery:clear
-php artisan pollora:doctor     # code de sortie 0
-php artisan pollora:status --json   # framework.current >= 13.32
+pollora doctor     # code de sortie 0
+pollora status --json   # framework.current >= 13.32
 ```
 
 et la suite de tests de votre projet passe, avec au moins autant de tests qu'au départ.

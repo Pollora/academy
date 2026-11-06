@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Reference version">
-Tested with Pollora 13.40. Facts come from the official documentation: [Actions & Filters](https://pollora.dev/hooks/actions-filters/), [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/), [Events & Listeners](https://pollora.dev/hooks/events-listeners/) and [WordPress Events Reference](https://pollora.dev/hooks/wordpress-events-reference/).
+Tested with Pollora 13.40. Facts come from the official documentation: [Actions & Filters](https://pollora.dev/hooks/actions-filters/), [WordPress hooks with PHP 8 attributes](https://pollora.dev/guides/wordpress-hooks-php-attributes/), [Events & Listeners](https://pollora.dev/hooks/events-listeners/) and [WordPress Events Reference](https://pollora.dev/hooks/wordpress-events-reference/). Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
 </Aside>
 
 **Duration: 60 min · Prerequisites: module 1, and knowing what a WordPress action and filter are.**
@@ -70,8 +70,8 @@ You register nothing: auto-discovery scans `app/` (as well as active themes and 
 `app/Cms/Hooks` is the convention, and it is where the generators write, but any class under `app/` is found. Group by feature (`Seo`, `Media`, `Admin`), not by hook name.
 
 ```bash
-php artisan pollora:make:action Seo
-php artisan pollora:make:filter ContentFilters
+pollora make:action Seo
+pollora make:filter ContentFilters
 ```
 
 To keep a class out of discovery, add `#[SkipDiscovery]` (from `Pollora\Attributes\SkipDiscovery`).

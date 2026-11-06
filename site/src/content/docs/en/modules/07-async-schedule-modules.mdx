@@ -9,7 +9,7 @@ import { Quiz, QuizResults } from 'starlight-quiz/components';
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Reference version">
-Tested with Pollora 13.40. Facts come from the official documentation ([asynchronous actions](https://pollora.dev/hooks/async-actions/), [scheduling](https://pollora.dev/advanced/scheduling/), [modules](https://pollora.dev/advanced/modules/)): when in doubt, it is the source of truth.
+Tested with Pollora 13.40. Facts come from the official documentation ([asynchronous actions](https://pollora.dev/hooks/async-actions/), [scheduling](https://pollora.dev/advanced/scheduling/), [modules](https://pollora.dev/advanced/modules/)): when in doubt, it is the source of truth. Commands: `pollora <name>` runs `php artisan pollora:<name>` (see [The course commands](/en/modules/01-mental-model/#the-course-commands)).
 </Aside>
 
 **Duration: 50 min · Prerequisites: modules 1 to 3 (attributes, hooks and events), and basic Laravel queue knowledge.**
@@ -50,7 +50,7 @@ Removing the `#[Async]` line makes the action synchronous again. Only **actions*
 To generate the class:
 
 ```bash
-php artisan pollora:make:action SyncEventToCrm --hook=save_post_event --async
+pollora make:action SyncEventToCrm --hook=save_post_event --async
 ```
 
 ### Four rules first
@@ -122,7 +122,7 @@ Async::assertNotDispatched(Indexer::class);
 `Async::fake()` records what would be queued without running it; `Async::runDispatched()` then runs what was recorded. Without `fake()`, `HOOKS_ASYNC_DRIVER=sync` runs everything at once, which suits end-to-end tests and a developer's `.env`.
 
 ```bash
-php artisan pollora:async:list           # --json available
+pollora async:list           # --json available
 ```
 
 It lists every asynchronous action (hook, handler, driver, delay, attempts…), the available drivers and the default driver with where it comes from. `pollora:doctor` also flags an ignored `#[Async]`: a declaration that cannot be honoured is logged and the action **runs synchronously**.
@@ -166,7 +166,7 @@ The driver is set in `config/schedule.php` or with `POLLORA_SCHEDULE_DRIVER`, an
 
 As with async, because of `DISABLE_WP_CRON`, **without a system cron** (`wp-cron` driver) or **without a worker** (`laravel` driver), no event fires. With `laravel` there is no `schedule:run` and no table of Pollora's own: a worker is all that runs the events, and `pollora:doctor` reports events more than ten minutes late.
 
-Changing driver only sends **new** events to the new driver. Existing ones stay where they are until `php artisan pollora:schedule:migrate` (with `--dry-run` to preview). `php artisan pollora:schedule:list` lists the events.
+Changing driver only sends **new** events to the new driver. Existing ones stay where they are until `pollora schedule:migrate` (with `--dry-run` to preview). `pollora schedule:list` lists the events.
 
 <Aside type="caution" title="Trap: the old option is gone">
 The option `wordpress.use_laravel_scheduler` and its bridge were removed, without a deprecation period: setting it no longer does anything. To keep events on Laravel's queue, use `POLLORA_SCHEDULE_DRIVER=laravel` and a worker in place of `schedule:run`.
@@ -184,7 +184,7 @@ Everything available in `app/` (post types, taxonomies, hooks…) also works ins
 ### Creating a module
 
 ```bash
-php artisan pollora:make:module Portfolio
+pollora make:module Portfolio
 ```
 
 The command downloads the `module-default` template, names it, enables the module, runs `composer dump-autoload` and builds its assets with npm. The module is deliberately lean: **no service provider, controller, route file, configuration, seeder or tests** by default. Classes declared with attributes in `app/` are discovered. Each layer is one flag away:
@@ -203,8 +203,8 @@ The command downloads the `module-default` template, names it, enables the modul
 Pollora's generators take `--module` and write inside the module, under the namespace its `composer.json` maps onto `app/`:
 
 ```bash
-php artisan pollora:make:post-type Project --module=Portfolio
-php artisan pollora:make:block project-card --module=Portfolio
+pollora make:post-type Project --module=Portfolio
+pollora make:block project-card --module=Portfolio
 ```
 
 ### Discovery inside a module
