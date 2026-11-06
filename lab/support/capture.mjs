@@ -4,7 +4,7 @@
 //   capture.mjs build <definition.json> <raw-dir> <output.json> <pollora-version>
 //       turns the raw output of a scripted session into a fixture (schema: documented in site/src/data/captures.mjs)
 //   capture.mjs diff <committed.json> <fresh.json>
-//       exit 1 and print what changed when the steps differ (date and Pollora version are not compared)
+//       exit 1 and print what changed when the steps differ (date is not compared, and version numbers are masked)
 import { readFileSync, writeFileSync } from 'node:fs';
 
 /**
@@ -37,7 +37,24 @@ export function normalize(text) {
 	);
 }
 
-const sameSteps = (a, b) => JSON.stringify(a.steps) === JSON.stringify(b.steps) && a.title === b.title && a.id === b.id;
+/**
+ * Version numbers describe the release the lab runs on, not the command: they are masked when a recording is
+ * compared with the committed fixture (the fixture itself keeps them, so the learner sees real output).
+ */
+export function maskVersions(text) {
+	return text
+		// The banner colours the version and adds a mark ("✓", "↑") depending on whether it is the latest release:
+		// that depends on the day, not on the command
+		.replace(/\x1b\[3[0-9]m(Pollora v?\d+\.\d+\.\d+[-+.\w]*)(?: [✓↑])?\x1b\[39m/g, '$1')
+		.replace(/\b(Pollora v?)\d+\.\d+\.\d+(?:[-+.\w]*)?/g, '$1X.Y.Z')
+		.replace(/\b(Laravel |PHP )\d+\.\d+\.\d+/g, '$1X.Y.Z')
+		.replace(/\b(WordPress )\d+\.\d+(?:\.\d+)?/g, '$1X.Y');
+}
+
+const maskStep = (step) => ({ ...step, output: maskVersions(step.output ?? '') });
+
+export const sameSteps = (a, b) =>
+	JSON.stringify(a.steps.map(maskStep)) === JSON.stringify(b.steps.map(maskStep)) && a.title === b.title && a.id === b.id;
 
 function build([definitionPath, rawDir, outputPath, version]) {
 	const definition = JSON.parse(readFileSync(definitionPath, 'utf8'));
@@ -68,12 +85,12 @@ function diff([committedPath, freshPath]) {
 	console.error(`capture ${committed.id}: the recorded output differs from the committed fixture`);
 	committed.steps.forEach((step, index) => {
 		const other = fresh.steps[index];
-		if (JSON.stringify(step) === JSON.stringify(other)) return;
+		if (other && JSON.stringify(maskStep(step)) === JSON.stringify(maskStep(other))) return;
 		console.error(`  step ${index} (${step.command}):`);
 		const a = step.output.split('\n');
 		const b = (other?.output ?? '').split('\n');
 		for (let line = 0; line < Math.max(a.length, b.length); line++) {
-			if (a[line] !== b[line]) console.error(`    line ${line + 1}\n      committed: ${JSON.stringify(a[line])}\n      recorded:  ${JSON.stringify(b[line])}`);
+			if (maskVersions(a[line] ?? '') !== maskVersions(b[line] ?? '')) console.error(`    line ${line + 1}\n      committed: ${JSON.stringify(a[line])}\n      recorded:  ${JSON.stringify(b[line])}`);
 		}
 		if (step.exitCode !== other?.exitCode) console.error(`    exit code: committed ${step.exitCode}, recorded ${other?.exitCode}`);
 	});
